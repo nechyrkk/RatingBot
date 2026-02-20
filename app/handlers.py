@@ -37,7 +37,7 @@ def is_compatible(liker_gender: str, target_interests: str) -> bool:
 @router.message(CommandStart())
 async def cmd_start(message: Message):
     user_id = message.from_user.id
-    is_admin = (user_id in config.ADMIN_ID)
+    is_admin = (user_id in config.ADMIN_IDS)
     keyboard = get_admin_keyboard() if is_admin else get_main_keyboard()
     await message.answer(
         "Привет! Я помогу создать анкету и найти знакомства.\n"
@@ -56,7 +56,7 @@ async def cmd_start(message: Message):
 @router.message(F.text == "Статистика")
 async def cmd_stats(message: Message, bot: Bot):
     user_id = message.from_user.id
-    if user_id not in config.ADMIN_ID:
+    if user_id not in config.ADMIN_IDS:
         await message.answer("У вас нет прав на просмотр статистики.")
         return
 
@@ -111,14 +111,14 @@ async def cmd_cancel(message: Message, state: FSMContext):
         await message.answer("Нет активного действия.")
         return
     await state.clear()
-    is_admin = (message.from_user.id in config.ADMIN_ID)
+    is_admin = (message.from_user.id in config.ADMIN_IDS)
     keyboard = get_admin_keyboard() if is_admin else get_main_keyboard()
     await message.answer("Действие отменено.", reply_markup=keyboard)
 
 @router.message(F.text == "Назад в меню")
 async def back_to_menu_general(message: Message, state: FSMContext):
     await state.clear()
-    is_admin = (message.from_user.id in config.ADMIN_ID)
+    is_admin = (message.from_user.id in config.ADMIN_IDS)
     keyboard = get_admin_keyboard() if is_admin else get_main_keyboard()
     await message.answer("Главное меню", reply_markup=keyboard)
 
@@ -270,7 +270,7 @@ async def show_profile(message: Message, user_id: int, edit_mode: bool = False):
         await message.answer_media_group(media=media_group)
 
     if not edit_mode:
-        is_admin = (message.from_user.id in config.ADMIN_ID)
+        is_admin = (message.from_user.id in config.ADMIN_IDS)
         keyboard = get_admin_keyboard() if is_admin else get_main_keyboard()
         await message.answer("Что хотите сделать дальше?", reply_markup=keyboard)
 
@@ -296,7 +296,7 @@ async def process_edit_choice(message: Message, state: FSMContext):
 
     if choice == "Назад":
         await state.clear()
-        is_admin = (message.from_user.id == config.ADMIN_ID)
+        is_admin = (message.from_user.id == config.ADMIN_IDS)
         keyboard = get_admin_keyboard() if is_admin else get_main_keyboard()
         await message.answer("Главное меню", reply_markup=keyboard)
         return
@@ -347,7 +347,7 @@ async def process_new_name(message: Message, state: FSMContext):
     await save_profile(user_id, profile['name'], profile['age'], profile['gender'], profile['interests'], profile['description'], profile['photos'])
 
     await state.clear()
-    is_admin = (user_id == config.ADMIN_ID)
+    is_admin = (user_id == config.ADMIN_IDS)
     keyboard = get_admin_keyboard() if is_admin else get_main_keyboard()
     await message.answer("Имя обновлено!", reply_markup=keyboard)
     await show_profile(message, user_id, edit_mode=True)
@@ -373,7 +373,7 @@ async def process_new_age(message: Message, state: FSMContext):
     await save_profile(user_id, profile['name'], profile['age'], profile['gender'], profile['interests'], profile['description'], profile['photos'])
 
     await state.clear()
-    is_admin = (user_id == config.ADMIN_ID)
+    is_admin = (user_id == config.ADMIN_IDS)
     keyboard = get_admin_keyboard() if is_admin else get_main_keyboard()
     await message.answer("Возраст обновлён!", reply_markup=keyboard)
     await show_profile(message, user_id, edit_mode=True)
@@ -392,7 +392,7 @@ async def process_new_gender(message: Message, state: FSMContext):
     await save_profile(user_id, profile['name'], profile['age'], profile['gender'], profile['interests'], profile['description'], profile['photos'])
 
     await state.clear()
-    is_admin = (user_id == config.ADMIN_ID)
+    is_admin = (user_id == config.ADMIN_IDS)
     keyboard = get_admin_keyboard() if is_admin else get_main_keyboard()
     await message.answer("Пол обновлён!", reply_markup=keyboard)
     await show_profile(message, user_id, edit_mode=True)
@@ -411,7 +411,7 @@ async def process_new_interests(message: Message, state: FSMContext):
     await save_profile(user_id, profile['name'], profile['age'], profile['gender'], profile['interests'], profile['description'], profile['photos'])
 
     await state.clear()
-    is_admin = (user_id == config.ADMIN_ID)
+    is_admin = (user_id == config.ADMIN_IDS)
     keyboard = get_admin_keyboard() if is_admin else get_main_keyboard()
     await message.answer("Интересы обновлены!", reply_markup=keyboard)
     await show_profile(message, user_id, edit_mode=True)
@@ -434,7 +434,7 @@ async def process_new_description(message: Message, state: FSMContext):
     await save_profile(user_id, profile['name'], profile['age'], profile['gender'], profile['interests'], profile['description'], profile['photos'])
 
     await state.clear()
-    is_admin = (user_id == config.ADMIN_ID)
+    is_admin = (user_id == config.ADMIN_IDS)
     keyboard = get_admin_keyboard() if is_admin else get_main_keyboard()
     await message.answer("Описание обновлено!", reply_markup=keyboard)
     await show_profile(message, user_id, edit_mode=True)
@@ -483,7 +483,7 @@ async def finish_edit_photos(message: Message, state: FSMContext):
     await save_profile(user_id, profile['name'], profile['age'], profile['gender'], profile['interests'], profile['description'], profile['photos'])
 
     await state.clear()
-    is_admin = (user_id == config.ADMIN_ID)
+    is_admin = (user_id == config.ADMIN_IDS)
     keyboard = get_admin_keyboard() if is_admin else get_main_keyboard()
     await message.answer("Фотографии обновлены!", reply_markup=keyboard)
     await show_profile(message, user_id, edit_mode=True)
@@ -864,7 +864,7 @@ async def handle_reply_callback(callback: CallbackQuery, bot: Bot):
 @router.message(BrowseProfiles.browsing, F.text == "Назад в меню")
 async def back_to_menu(message: Message, state: FSMContext):
     await state.clear()
-    is_admin = (message.from_user.id == config.ADMIN_ID)
+    is_admin = (message.from_user.id == config.ADMIN_IDS)
     keyboard = get_admin_keyboard() if is_admin else get_main_keyboard()
     await message.answer("Главное меню", reply_markup=keyboard)
 
