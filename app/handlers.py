@@ -4,7 +4,7 @@ from aiogram import Router, F, Bot
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, CallbackQuery, InputMediaPhoto
-from aiogram.exceptions import TelegramForbiddenError
+from aiogram.exceptions import TelegramForbiddenError, TelegramBadRequest
 import aiosqlite
 import config
 from meetings import router as meet_router
@@ -300,16 +300,52 @@ async def show_profile(message: Message, user_id: int, edit_mode: bool = False):
 
     if not photos:
         await message.answer(text, parse_mode="Markdown")
-    elif len(photos) == 1:
-        await message.answer_photo(photo=photos[0], caption=text, parse_mode="Markdown")
-    else:
+        return
+
+    # Пытаемся отправить медиагруппой
+    if len(photos) > 1:
         media_group = []
         for i, file_id in enumerate(photos):
             if i == 0:
                 media_group.append(InputMediaPhoto(media=file_id, caption=text, parse_mode="Markdown"))
             else:
                 media_group.append(InputMediaPhoto(media=file_id))
-        await message.answer_media_group(media=media_group)
+        try:
+            await message.answer_media_group(media=media_group)
+        except TelegramBadRequest as e:
+            logging.error(f"Ошибка отправки медиагруппы для {user_id}: {e}. Пробуем отправить по одному.")
+            # Отправляем по одному
+            # Сначала отправляем текст отдельно
+            await message.answer(text, parse_mode="Markdown")
+            valid_photos = []
+            for file_id in photos:
+                try:
+                    await message.answer_photo(photo=file_id)
+                    valid_photos.append(file_id)
+                except TelegramBadRequest:
+                    logging.warning(f"Недействительный file_id {file_id} для пользователя {user_id}, пропускаем")
+            # Если все фото битые, предложить обновить
+            if not valid_photos:
+                await message.answer("⚠️ Ваши фотографии повреждены. Пожалуйста, обновите их через редактирование анкеты.")
+            # Сохраняем только валидные фото обратно в профиль
+            if len(valid_photos) != len(photos):
+                profile['photos'] = valid_photos
+                await save_profile(user_id, profile['name'], profile['age'], profile['gender'],
+                                   profile['interests'], profile['institute'],
+                                   profile['description'], valid_photos)
+    else:
+        # Одно фото
+        try:
+            await message.answer_photo(photo=photos[0], caption=text, parse_mode="Markdown")
+        except TelegramBadRequest:
+            logging.warning(f"Недействительный file_id {photos[0]} для пользователя {user_id}")
+            await message.answer(text, parse_mode="Markdown")
+            await message.answer("⚠️ Ваше фото повреждено. Пожалуйста, обновите его через редактирование анкеты.")
+            # Удаляем фото из профиля
+            profile['photos'] = []
+            await save_profile(user_id, profile['name'], profile['age'], profile['gender'],
+                               profile['interests'], profile['institute'],
+                               profile['description'], [])
 
     if not edit_mode:
         is_admin = (message.from_user.id in config.ADMIN_IDS)
@@ -614,7 +650,6 @@ async def cmd_browse(message: Message, state: FSMContext):
 
 
 async def show_next_profile(target_message: Message, user_id: int, state: FSMContext):
-    # Получаем данные состояния (пулы)
     data = await state.get_data()
     next_id, updated_data = await get_next_profile(user_id, data)
     if next_id is None:
@@ -638,24 +673,57 @@ async def show_next_profile(target_message: Message, user_id: int, state: FSMCon
             reply_markup=get_like_dislike_superlike_keyboard(next_id)
         )
     elif len(photos) == 1:
-        await target_message.answer_photo(
-            photo=photos[0],
-            caption=text,
-            parse_mode="Markdown",
-            reply_markup=get_like_dislike_superlike_keyboard(next_id)
-        )
+        try:
+            await target_message.answer_photo(
+                photo=photos[0],
+                caption=text,
+                parse_mode="Markdown",
+                reply_markup=get_like_dislike_superlike_keyboard(next_id)
+            )
+        except TelegramBadRequest:
+            logging.warning(f"Недействительный file_id {photos[0]} в анкете {next_id}")
+            await target_message.answer(
+                text + "\n\n⚠️ Фото повреждено и не может быть показано.",
+                parse_mode="Markdown",
+                reply_markup=get_like_dislike_superlike_keyboard(next_id)
+            )
+            # Удаляем фото из профиля?
+            # Можем не удалять, просто показать без фото.
     else:
+        # Пробуем отправить медиагруппой
         media_group = []
         for i, file_id in enumerate(photos):
             if i == 0:
                 media_group.append(InputMediaPhoto(media=file_id, caption=text, parse_mode="Markdown"))
             else:
                 media_group.append(InputMediaPhoto(media=file_id))
-        await target_message.answer_media_group(media=media_group)
-        await target_message.answer(
-            "Оцените анкету:",
-            reply_markup=get_like_dislike_superlike_keyboard(next_id)
-        )
+        try:
+            await target_message.answer_media_group(media=media_group)
+            await target_message.answer(
+                "Оцените анкету:",
+                reply_markup=get_like_dislike_superlike_keyboard(next_id)
+            )
+        except TelegramBadRequest:
+            logging.warning(f"Ошибка отправки медиагруппы для анкеты {next_id}, пробуем по одному")
+            await target_message.answer(text, parse_mode="Markdown")
+            valid_photos = []
+            for file_id in photos:
+                try:
+                    await target_message.answer_photo(photo=file_id)
+                    valid_photos.append(file_id)
+                except TelegramBadRequest:
+                    logging.warning(f"Недействительный file_id {file_id} в анкете {next_id}")
+            if valid_photos:
+                await target_message.answer(
+                    "Оцените анкету:",
+                    reply_markup=get_like_dislike_superlike_keyboard(next_id)
+                )
+            else:
+                await target_message.answer(
+                    "⚠️ Все фото повреждены. Анкета видна без фото.",
+                    reply_markup=get_like_dislike_superlike_keyboard(next_id)
+                )
+            # Можно не сохранять изменения в базе для чужой анкеты
 
 # --------------------- ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ДЛЯ ОТПРАВКИ АНКЕТЫ ---------------------
 async def send_profile_to_user(bot: Bot, to_user_id: int, profile: dict, custom_text: str = None):
@@ -675,15 +743,30 @@ async def send_profile_to_user(bot: Bot, to_user_id: int, profile: dict, custom_
         if not photos:
             await bot.send_message(to_user_id, text, parse_mode="Markdown")
         elif len(photos) == 1:
-            await bot.send_photo(to_user_id, photo=photos[0], caption=text, parse_mode="Markdown")
+            try:
+                await bot.send_photo(to_user_id, photo=photos[0], caption=text, parse_mode="Markdown")
+            except TelegramBadRequest:
+                logging.warning(f"Недействительный file_id {photos[0]} для пользователя {profile.get('user_id', 'unknown')}")
+                await bot.send_message(to_user_id, text, parse_mode="Markdown")
+                await bot.send_message(to_user_id, "⚠️ Фото пользователя повреждено, но анкета видна без фото.")
         else:
+            # Пробуем отправить медиагруппой
             media_group = []
             for i, file_id in enumerate(photos):
                 if i == 0:
                     media_group.append(InputMediaPhoto(media=file_id, caption=text, parse_mode="Markdown"))
                 else:
                     media_group.append(InputMediaPhoto(media=file_id))
-            await bot.send_media_group(to_user_id, media=media_group)
+            try:
+                await bot.send_media_group(to_user_id, media=media_group)
+            except TelegramBadRequest:
+                logging.warning(f"Ошибка отправки медиагруппы для пользователя {to_user_id}, пробуем по одному")
+                await bot.send_message(to_user_id, text, parse_mode="Markdown")
+                for file_id in photos:
+                    try:
+                        await bot.send_photo(to_user_id, photo=file_id)
+                    except TelegramBadRequest:
+                        logging.warning(f"Недействительный file_id {file_id} пропущен")
     except TelegramForbiddenError:
         logging.warning(f"User {to_user_id} has blocked the bot. Cannot send profile.")
     except Exception as e:
