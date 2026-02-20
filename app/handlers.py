@@ -96,11 +96,11 @@ async def cmd_stats(message: Message, bot: Bot):
 
     # Отправляем, разбивая если слишком длинный текст
     if len(text) > 4096:
-        parts = [text[i:i+4096] for i in range(0, len(text), 4096)]
+        parts = [text[i:i + 4096] for i in range(0, len(text), 4096)]
         for part in parts:
-            await message.answer(part, parse_mode="Markdown")
+            await message.answer(part)
     else:
-        await message.answer(text, parse_mode="Markdown")
+        await message.answer(text)
 
 # --------------------- ОТМЕНА ---------------------
 @router.message(Command("cancel"))
