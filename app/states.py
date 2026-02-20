@@ -5,6 +5,7 @@ class CreateProfile(StatesGroup):
     waiting_for_age = State()
     waiting_for_gender = State()
     waiting_for_interests = State()
+    waiting_for_institute = State()
     waiting_for_description = State()
     waiting_for_photos = State()
 
@@ -14,6 +15,7 @@ class EditProfile(StatesGroup):
     waiting_for_new_age = State()
     waiting_for_new_gender = State()
     waiting_for_new_interests = State()
+    waiting_for_new_institute = State()
     waiting_for_new_description = State()
     waiting_for_new_photos = State()
 

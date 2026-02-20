@@ -1,16 +1,17 @@
-# keyboards.py
 from aiogram.types import (
     ReplyKeyboardMarkup, KeyboardButton,
     InlineKeyboardMarkup, InlineKeyboardButton,
     ReplyKeyboardRemove
 )
+from data import INSTITUTES
 
+# ------------- Reply-клавиатуры -------------
 def get_main_keyboard():
     buttons = [
         [KeyboardButton(text="Создать анкету")],
         [KeyboardButton(text="Моя анкета"), KeyboardButton(text="Редактировать анкету")],
         [KeyboardButton(text="Просмотр анкет"), KeyboardButton(text="Мой рейтинг")],
-        [KeyboardButton(text="Удалить анкету")]
+        [KeyboardButton(text="Топ встреч"), KeyboardButton(text="Удалить анкету")]
     ]
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
@@ -19,7 +20,7 @@ def get_admin_keyboard():
         [KeyboardButton(text="Создать анкету")],
         [KeyboardButton(text="Моя анкета"), KeyboardButton(text="Редактировать анкету")],
         [KeyboardButton(text="Просмотр анкет"), KeyboardButton(text="Статистика"), KeyboardButton(text="Мой рейтинг")],
-        [KeyboardButton(text="Удалить анкету")]
+        [KeyboardButton(text="Топ встреч"), KeyboardButton(text="Удалить анкету")]
     ]
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
@@ -27,7 +28,8 @@ def get_edit_keyboard():
     buttons = [
         [KeyboardButton(text="Изменить имя"), KeyboardButton(text="Изменить возраст")],
         [KeyboardButton(text="Изменить пол"), KeyboardButton(text="Изменить интересы")],
-        [KeyboardButton(text="Изменить описание"), KeyboardButton(text="Изменить фото")],
+        [KeyboardButton(text="Изменить институт"), KeyboardButton(text="Изменить описание")],
+        [KeyboardButton(text="Изменить фото")],
         [KeyboardButton(text="Пересоздать анкету")],
         [KeyboardButton(text="Назад")]
     ]
@@ -46,6 +48,13 @@ def get_interests_keyboard():
     ]
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True, one_time_keyboard=True)
 
+def get_institute_keyboard():
+    buttons = []
+    for i in range(0, len(INSTITUTES), 2):
+        row = [KeyboardButton(text=inst) for inst in INSTITUTES[i:i+2]]
+        buttons.append(row)
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True, one_time_keyboard=True)
+
 def get_done_keyboard():
     button = KeyboardButton(text="Готово")
     return ReplyKeyboardMarkup(keyboard=[[button]], resize_keyboard=True)
@@ -56,6 +65,7 @@ def get_back_keyboard():
 
 remove_keyboard = ReplyKeyboardRemove()
 
+# ------------- Inline-клавиатуры -------------
 def get_like_dislike_superlike_keyboard(owner_id: int):
     buttons = [
         [
@@ -84,16 +94,20 @@ def get_delete_confirm_keyboard():
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
-# НОВАЯ КЛАВИАТУРА ДЛЯ ОЦЕНКИ ПОСЛЕ МЕТЧА
-def get_rating_keyboard(target_id: int):
-    """Инлайн-клавиатура с оценками 1-5 (звёздочки)"""
+def get_meet_keyboard(offer_id: int, user_id: int, other_id: int):
+    """Клавиатура для предложения встречи (сейчас не используется, но оставим для совместимости)"""
     buttons = [
         [
-            InlineKeyboardButton(text="1⭐", callback_data=f"rate_1_{target_id}"),
-            InlineKeyboardButton(text="2⭐", callback_data=f"rate_2_{target_id}"),
-            InlineKeyboardButton(text="3⭐", callback_data=f"rate_3_{target_id}"),
-            InlineKeyboardButton(text="4⭐", callback_data=f"rate_4_{target_id}"),
-            InlineKeyboardButton(text="5⭐", callback_data=f"rate_5_{target_id}"),
+            InlineKeyboardButton(text="✅ Я там", callback_data=f"meet_accept_{offer_id}"),
+            InlineKeyboardButton(text="❌ Отказаться", callback_data=f"meet_decline_{offer_id}"),
         ]
     ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+def get_rating_keyboard(target_id: int):
+    buttons = []
+    row = []
+    for i in range(1, 6):
+        row.append(InlineKeyboardButton(text=str(i), callback_data=f"rate_{i}_{target_id}"))
+    buttons.append(row)
     return InlineKeyboardMarkup(inline_keyboard=buttons)

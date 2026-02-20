@@ -1,16 +1,17 @@
-# data.py
 import aiosqlite
 import json
-import math
+import datetime
 from typing import Optional, Dict, Any, Set
-from aiogram import Bot  # для функции get_all_usernames
+from aiogram import Bot
 
 DB_PATH = "bot_database.db"
 
+# Список институтов (фиксированный)
+INSTITUTES = ["ИИТ", "ИИИ", "ИТУ", "ИКБ", "ИТХТ", "ИПТИП"]
+
 async def init_db():
-    """Создаёт таблицы, если их нет, и добавляет поля для рейтинга."""
     async with aiosqlite.connect(DB_PATH) as db:
-        # Таблица профилей
+        # Таблица профилей с колонками рейтинга
         await db.execute('''
             CREATE TABLE IF NOT EXISTS profiles (
                 user_id INTEGER PRIMARY KEY,
@@ -18,20 +19,13 @@ async def init_db():
                 age INTEGER NOT NULL,
                 gender TEXT NOT NULL,
                 interests TEXT NOT NULL,
+                institute TEXT DEFAULT "ИИТ",
                 description TEXT NOT NULL,
-                photos TEXT NOT NULL
+                photos TEXT NOT NULL,
+                rating_sum REAL DEFAULT 0,
+                rating_weight REAL DEFAULT 0
             )
         ''')
-        # Добавляем поля для рейтинга, если их ещё нет
-        try:
-            await db.execute('ALTER TABLE profiles ADD COLUMN rating_sum REAL DEFAULT 0')
-        except aiosqlite.OperationalError:
-            pass  # поле уже существует
-        try:
-            await db.execute('ALTER TABLE profiles ADD COLUMN rating_weight REAL DEFAULT 0')
-        except aiosqlite.OperationalError:
-            pass
-
         # Таблица лайков
         await db.execute('''
             CREATE TABLE IF NOT EXISTS likes (
@@ -48,46 +42,77 @@ async def init_db():
                 PRIMARY KEY (user_id, disliked_user_id)
             )
         ''')
-        # Таблица оценок (рейтинг)
+        # Таблица заданий на встречу
+        await db.execute('''
+            CREATE TABLE IF NOT EXISTS meet_tasks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user1_id INTEGER NOT NULL,
+                user2_id INTEGER NOT NULL,
+                initiator_id INTEGER NOT NULL,
+                institute TEXT NOT NULL,
+                location TEXT NOT NULL,
+                status TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                deadline TIMESTAMP,
+                video_message_id INTEGER,
+                admin_decision INTEGER
+            )
+        ''')
+        # Таблица очков
+        await db.execute('''
+            CREATE TABLE IF NOT EXISTS user_points (
+                user_id INTEGER NOT NULL,
+                year_month TEXT NOT NULL,
+                points INTEGER DEFAULT 0,
+                PRIMARY KEY (user_id, year_month)
+            )
+        ''')
+        # Таблица рейтингов (используется в rating_system)
         await db.execute('''
             CREATE TABLE IF NOT EXISTS ratings (
-                from_user_id INTEGER,
-                to_user_id INTEGER,
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                from_user_id INTEGER NOT NULL,
+                to_user_id INTEGER NOT NULL,
                 value INTEGER NOT NULL,
                 voter_weight REAL NOT NULL,
                 timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-                PRIMARY KEY (from_user_id, to_user_id)
+                UNIQUE(from_user_id, to_user_id)
             )
         ''')
         await db.commit()
 
 # ---------- Профили ----------
-async def save_profile(user_id: int, name: str, age: int, gender: str, interests: str, description: str, photos: list):
+async def save_profile(user_id: int, name: str, age: int, gender: str, interests: str, institute: str, description: str, photos: list):
     photos_json = json.dumps(photos)
     async with aiosqlite.connect(DB_PATH) as db:
+        # Получаем текущие значения рейтинга, если профиль уже существует
+        async with db.execute('SELECT rating_sum, rating_weight FROM profiles WHERE user_id = ?', (user_id,)) as cursor:
+            row = await cursor.fetchone()
+        if row:
+            rating_sum, rating_weight = row
+        else:
+            rating_sum, rating_weight = 0.0, 0.0
+
         await db.execute('''
-            INSERT OR REPLACE INTO profiles 
-            (user_id, name, age, gender, interests, description, photos, rating_sum, rating_weight)
-            VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE((SELECT rating_sum FROM profiles WHERE user_id=?), 0), 
-                    COALESCE((SELECT rating_weight FROM profiles WHERE user_id=?), 0))
-        ''', (user_id, name, age, gender, interests, description, photos_json, user_id, user_id))
+            INSERT OR REPLACE INTO profiles
+            (user_id, name, age, gender, interests, institute, description, photos, rating_sum, rating_weight)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (user_id, name, age, gender, interests, institute, description, photos_json, rating_sum, rating_weight))
         await db.commit()
 
 async def get_profile(user_id: int) -> Optional[Dict[str, Any]]:
     async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute(
-            'SELECT name, age, gender, interests, description, photos FROM profiles WHERE user_id = ?',
-            (user_id,)
-        ) as cursor:
+        async with db.execute('SELECT name, age, gender, interests, institute, description, photos FROM profiles WHERE user_id = ?', (user_id,)) as cursor:
             row = await cursor.fetchone()
             if row:
-                name, age, gender, interests, description, photos_json = row
+                name, age, gender, interests, institute, description, photos_json = row
                 photos = json.loads(photos_json)
                 return {
                     'name': name,
                     'age': age,
                     'gender': gender,
                     'interests': interests,
+                    'institute': institute,
                     'description': description,
                     'photos': photos
                 }
@@ -95,25 +120,29 @@ async def get_profile(user_id: int) -> Optional[Dict[str, Any]]:
 
 async def get_all_profiles() -> Dict[int, Dict[str, Any]]:
     async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute(
-            'SELECT user_id, name, age, gender, interests, description, photos FROM profiles'
-        ) as cursor:
+        async with db.execute('SELECT user_id, name, age, gender, interests, institute, description, photos FROM profiles') as cursor:
             rows = await cursor.fetchall()
             profiles = {}
             for row in rows:
-                user_id, name, age, gender, interests, description, photos_json = row
+                user_id, name, age, gender, interests, institute, description, photos_json = row
                 photos = json.loads(photos_json)
                 profiles[user_id] = {
                     'name': name,
                     'age': age,
                     'gender': gender,
                     'interests': interests,
+                    'institute': institute,
                     'description': description,
                     'photos': photos
                 }
             return profiles
 
-# ---------- Лайки/дизлайки ----------
+async def update_profile_institute(user_id: int, institute: str):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute('UPDATE profiles SET institute = ? WHERE user_id = ?', (institute, user_id))
+        await db.commit()
+
+# ---------- Оценки (лайки/дизлайки) ----------
 async def add_like(user_id: int, target_id: int):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute('INSERT OR IGNORE INTO likes (user_id, liked_user_id) VALUES (?, ?)', (user_id, target_id))
@@ -149,10 +178,6 @@ async def get_user_stats() -> Dict[str, Any]:
         return {'total': total, 'gender': gender_stats}
 
 async def get_all_usernames(bot: Bot) -> dict:
-    """
-    Возвращает словарь {user_id: отображаемая строка с именем и username}.
-    Формат: "Имя (@username)" или "Имя (нет username)" или "Имя (чат недоступен)"
-    """
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute('SELECT user_id, name FROM profiles') as cursor:
             rows = await cursor.fetchall()
@@ -169,13 +194,92 @@ async def get_all_usernames(bot: Bot) -> dict:
                 result[user_id] = display
             return result
 
-# ---------- Удаление ----------
-async def delete_profile(user_id: int):
+# ---------- Задания на встречу (meet_tasks) ----------
+async def create_meet_task(user1_id: int, user2_id: int, initiator_id: int, institute: str, location: str, deadline: datetime.datetime):
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute('DELETE FROM profiles WHERE user_id = ?', (user_id,))
-        await db.execute('DELETE FROM likes WHERE user_id = ?', (user_id,))
-        await db.execute('DELETE FROM likes WHERE liked_user_id = ?', (user_id,))
-        await db.execute('DELETE FROM dislikes WHERE user_id = ?', (user_id,))
-        await db.execute('DELETE FROM dislikes WHERE disliked_user_id = ?', (user_id,))
+        cursor = await db.execute(
+            'INSERT INTO meet_tasks (user1_id, user2_id, initiator_id, institute, location, status, deadline) VALUES (?, ?, ?, ?, ?, ?, ?)',
+            (user1_id, user2_id, initiator_id, institute, location, 'waiting_video', deadline)
+        )
+        await db.commit()
+        return cursor.lastrowid
+
+async def get_meet_task_by_id(task_id: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute('SELECT * FROM meet_tasks WHERE id = ?', (task_id,)) as cursor:
+            row = await cursor.fetchone()
+            if row:
+                columns = [description[0] for description in cursor.description]
+                return dict(zip(columns, row))
+            return None
+
+async def get_active_meet_task_for_user(user_id: int, status: str = 'waiting_video'):
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            'SELECT * FROM meet_tasks WHERE initiator_id = ? AND status = ? AND deadline > CURRENT_TIMESTAMP',
+            (user_id, status)
+        ) as cursor:
+            row = await cursor.fetchone()
+            if row:
+                columns = [description[0] for description in cursor.description]
+                return dict(zip(columns, row))
+            return None
+
+async def update_meet_task_status(task_id: int, status: str, video_message_id: int = None, admin_decision: int = None):
+    async with aiosqlite.connect(DB_PATH) as db:
+        query = 'UPDATE meet_tasks SET status = ?'
+        params = [status]
+        if video_message_id is not None:
+            query += ', video_message_id = ?'
+            params.append(video_message_id)
+        if admin_decision is not None:
+            query += ', admin_decision = ?'
+            params.append(admin_decision)
+        query += ' WHERE id = ?'
+        params.append(task_id)
+        await db.execute(query, params)
+        await db.commit()
+
+async def expire_old_tasks():
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            'UPDATE meet_tasks SET status = "expired" WHERE status = "waiting_video" AND deadline < CURRENT_TIMESTAMP'
+        )
+        await db.commit()
+
+# ---------- Очки ----------
+async def add_points(user_id: int, points: int):
+    year_month = datetime.datetime.now().strftime('%Y-%m')
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute('''
+            INSERT INTO user_points (user_id, year_month, points) VALUES (?, ?, ?)
+            ON CONFLICT(user_id, year_month) DO UPDATE SET points = points + ?
+        ''', (user_id, year_month, points, points))
+        await db.commit()
+
+async def get_top_users(limit: int = 10):
+    year_month = datetime.datetime.now().strftime('%Y-%m')
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            'SELECT user_id, points FROM user_points WHERE year_month = ? ORDER BY points DESC LIMIT ?',
+            (year_month, limit)
+        ) as cursor:
+            rows = await cursor.fetchall()
+            return [(row[0], row[1]) for row in rows]
+
+async def reset_all_points():
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute('DELETE FROM user_points')
+        await db.commit()
+
+async def delete_profile(user_id: int):
+    """Полностью удаляет профиль пользователя и все связанные записи."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        # Удаляем из таблиц likes, dislikes, ratings, meet_tasks, user_points, profiles
+        await db.execute('DELETE FROM likes WHERE user_id = ? OR liked_user_id = ?', (user_id, user_id))
+        await db.execute('DELETE FROM dislikes WHERE user_id = ? OR disliked_user_id = ?', (user_id, user_id))
         await db.execute('DELETE FROM ratings WHERE from_user_id = ? OR to_user_id = ?', (user_id, user_id))
+        await db.execute('DELETE FROM meet_tasks WHERE user1_id = ? OR user2_id = ? OR initiator_id = ?', (user_id, user_id, user_id))
+        await db.execute('DELETE FROM user_points WHERE user_id = ?', (user_id,))
+        await db.execute('DELETE FROM profiles WHERE user_id = ?', (user_id,))
         await db.commit()
