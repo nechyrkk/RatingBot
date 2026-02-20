@@ -7,30 +7,24 @@ from data import INSTITUTES
 
 # ------------- Reply-клавиатуры -------------
 def get_main_keyboard(has_profile: bool = False):
-    if has_profile:
-        buttons = [
-            [KeyboardButton(text="Моя анкета"), KeyboardButton(text="Редактировать анкету")],
-            [KeyboardButton(text="Просмотр анкет"), KeyboardButton(text="Мой рейтинг")],
-            [KeyboardButton(text="Топ встреч"), KeyboardButton(text="Удалить анкету")]
-        ]
-    else:
-        buttons = [
-            [KeyboardButton(text="Создать анкету")],
-            [KeyboardButton(text="Моя анкета"), KeyboardButton(text="Редактировать анкету")],
-            [KeyboardButton(text="Просмотр анкет"), KeyboardButton(text="Мой рейтинг")],
-            [KeyboardButton(text="Топ встреч"), KeyboardButton(text="Удалить анкету")]
-        ]
+    buttons = []
+    if not has_profile:
+        buttons.append([KeyboardButton(text="Создать анкету")])
+    buttons.append([KeyboardButton(text="Моя анкета"), KeyboardButton(text="Редактировать анкету")])
+    buttons.append([KeyboardButton(text="Просмотр анкет"), KeyboardButton(text="Мой рейтинг")])
+    buttons.append([KeyboardButton(text="Топ встреч"), KeyboardButton(text="Удалить анкету")])
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
-def get_admin_keyboard():
-    buttons = [
-        [KeyboardButton(text="Создать анкету")],
-        [KeyboardButton(text="Моя анкета"), KeyboardButton(text="Редактировать анкету")],
-        [KeyboardButton(text="Просмотр анкет"), KeyboardButton(text="Статистика"), KeyboardButton(text="Мой рейтинг")],
-        [KeyboardButton(text="Топ встреч"), KeyboardButton(text="Удалить анкету")]
-    ]
+def get_admin_keyboard(has_profile: bool = False):
+    buttons = []
+    if not has_profile:
+        buttons.append([KeyboardButton(text="Создать анкету")])
+    buttons.append([KeyboardButton(text="Моя анкета"), KeyboardButton(text="Редактировать анкету")])
+    buttons.append([KeyboardButton(text="Просмотр анкет"), KeyboardButton(text="Статистика"), KeyboardButton(text="Мой рейтинг")])
+    buttons.append([KeyboardButton(text="Топ встреч"), KeyboardButton(text="Удалить анкету")])
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
+# остальные функции без изменений
 def get_edit_keyboard():
     buttons = [
         [KeyboardButton(text="Изменить имя"), KeyboardButton(text="Изменить возраст")],
@@ -43,9 +37,7 @@ def get_edit_keyboard():
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
 def get_gender_keyboard():
-    buttons = [
-        [KeyboardButton(text="Парень"), KeyboardButton(text="Девушка")]
-    ]
+    buttons = [[KeyboardButton(text="Парень"), KeyboardButton(text="Девушка")]]
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True, one_time_keyboard=True)
 
 def get_interests_keyboard():
