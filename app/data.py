@@ -1,7 +1,7 @@
 import aiosqlite
 import json
 import datetime
-from typing import Optional, Dict, Any, Set
+from typing import Optional, Dict, Any, Set, Tuple
 from aiogram import Bot
 
 DB_PATH = "bot_database.db"
@@ -39,7 +39,7 @@ async def init_db():
                 PRIMARY KEY (user_id, disliked_user_id)
             )
         ''')
-        # Таблица заданий на встречу
+        # Таблица заданий на встречу (с новыми колонками)
         await db.execute('''
             CREATE TABLE IF NOT EXISTS meet_tasks (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -49,6 +49,10 @@ async def init_db():
                 institute TEXT NOT NULL,
                 location TEXT NOT NULL,
                 status TEXT NOT NULL,
+                user1_confirmed INTEGER DEFAULT 0,
+                user2_confirmed INTEGER DEFAULT 0,
+                msg1_id INTEGER,
+                msg2_id INTEGER,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 deadline TIMESTAMP,
                 video_message_id INTEGER,
@@ -77,22 +81,38 @@ async def init_db():
             )
         ''')
 
-        # Проверка и добавление новых колонок в таблицу profiles
+        # === Проверка и добавление новых колонок в существующие таблицы ===
+
+        # Для таблицы profiles
         cursor = await db.execute("PRAGMA table_info(profiles)")
         columns = await cursor.fetchall()
         column_names = [col[1] for col in columns]
-
         if 'institute' not in column_names:
             await db.execute("ALTER TABLE profiles ADD COLUMN institute TEXT DEFAULT 'ИИТ'")
             print("Добавлена колонка institute в profiles")
-
         if 'rating_sum' not in column_names:
             await db.execute("ALTER TABLE profiles ADD COLUMN rating_sum REAL DEFAULT 0")
             print("Добавлена колонка rating_sum в profiles")
-
         if 'rating_weight' not in column_names:
             await db.execute("ALTER TABLE profiles ADD COLUMN rating_weight REAL DEFAULT 0")
             print("Добавлена колонка rating_weight в profiles")
+
+        # Для таблицы meet_tasks
+        cursor = await db.execute("PRAGMA table_info(meet_tasks)")
+        columns = await cursor.fetchall()
+        column_names = [col[1] for col in columns]
+        if 'user1_confirmed' not in column_names:
+            await db.execute("ALTER TABLE meet_tasks ADD COLUMN user1_confirmed INTEGER DEFAULT 0")
+            print("Добавлена колонка user1_confirmed в meet_tasks")
+        if 'user2_confirmed' not in column_names:
+            await db.execute("ALTER TABLE meet_tasks ADD COLUMN user2_confirmed INTEGER DEFAULT 0")
+            print("Добавлена колонка user2_confirmed в meet_tasks")
+        if 'msg1_id' not in column_names:
+            await db.execute("ALTER TABLE meet_tasks ADD COLUMN msg1_id INTEGER")
+            print("Добавлена колонка msg1_id в meet_tasks")
+        if 'msg2_id' not in column_names:
+            await db.execute("ALTER TABLE meet_tasks ADD COLUMN msg2_id INTEGER")
+            print("Добавлена колонка msg2_id в meet_tasks")
 
         await db.commit()
 
@@ -210,11 +230,11 @@ async def get_all_usernames(bot: Bot) -> dict:
             return result
 
 # ---------- Задания на встречу (meet_tasks) ----------
-async def create_meet_task(user1_id: int, user2_id: int, initiator_id: int, institute: str, location: str, deadline: datetime.datetime):
+async def create_meet_task(user1_id: int, user2_id: int, initiator_id: int, institute: str, location: str, deadline: datetime.datetime, msg1_id: int = None, msg2_id: int = None):
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
-            'INSERT INTO meet_tasks (user1_id, user2_id, initiator_id, institute, location, status, deadline) VALUES (?, ?, ?, ?, ?, ?, ?)',
-            (user1_id, user2_id, initiator_id, institute, location, 'waiting_video', deadline)
+            'INSERT INTO meet_tasks (user1_id, user2_id, initiator_id, institute, location, status, deadline, user1_confirmed, user2_confirmed, msg1_id, msg2_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            (user1_id, user2_id, initiator_id, institute, location, 'pending', deadline, 0, 0, msg1_id, msg2_id)
         )
         await db.commit()
         return cursor.lastrowid
@@ -231,8 +251,8 @@ async def get_meet_task_by_id(task_id: int):
 async def get_active_meet_task_for_user(user_id: int, status: str = 'waiting_video'):
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute(
-            'SELECT * FROM meet_tasks WHERE initiator_id = ? AND status = ? AND deadline > CURRENT_TIMESTAMP',
-            (user_id, status)
+            'SELECT * FROM meet_tasks WHERE (user1_id = ? OR user2_id = ?) AND status = ? AND deadline > CURRENT_TIMESTAMP',
+            (user_id, user_id, status)
         ) as cursor:
             row = await cursor.fetchone()
             if row:
@@ -255,12 +275,52 @@ async def update_meet_task_status(task_id: int, status: str, video_message_id: i
         await db.execute(query, params)
         await db.commit()
 
-async def expire_old_tasks():
+async def update_meet_agreement(task_id: int, user_id: int, agreed: bool):
+    """Обновляет статус согласия пользователя в задании.
+       Возвращает:
+         - 'both_agreed', если оба согласились
+         - 'agreed', если только этот пользователь согласился
+         - 'declined', если пользователь отказался (статус задания меняется на declined)
+         - None, если задание не найдено или уже не в статусе pending
+    """
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            'UPDATE meet_tasks SET status = "expired" WHERE status = "waiting_video" AND deadline < CURRENT_TIMESTAMP'
-        )
-        await db.commit()
+        # Получаем задание
+        async with db.execute('SELECT user1_id, user2_id, status FROM meet_tasks WHERE id = ?', (task_id,)) as cursor:
+            row = await cursor.fetchone()
+            if not row:
+                return None
+            user1, user2, status = row
+
+        if status != 'pending':
+            return None  # уже обработано
+
+        if user_id == user1:
+            column = 'user1_confirmed'
+            other_id = user2
+        elif user_id == user2:
+            column = 'user2_confirmed'
+            other_id = user1
+        else:
+            return None
+
+        if agreed:
+            # Отмечаем согласие
+            await db.execute(f'UPDATE meet_tasks SET {column} = 1 WHERE id = ?', (task_id,))
+            # Проверяем, оба ли согласны
+            async with db.execute('SELECT user1_confirmed, user2_confirmed FROM meet_tasks WHERE id = ?', (task_id,)) as cursor:
+                row = await cursor.fetchone()
+                if row and row[0] == 1 and row[1] == 1:
+                    # Оба согласны -> переводим в waiting_video
+                    await db.execute('UPDATE meet_tasks SET status = ? WHERE id = ?', ('waiting_video', task_id))
+                    await db.commit()
+                    return 'both_agreed'
+            await db.commit()
+            return 'agreed'
+        else:
+            # Отказ -> меняем статус на declined
+            await db.execute('UPDATE meet_tasks SET status = ? WHERE id = ?', ('declined', task_id))
+            await db.commit()
+            return 'declined'
 
 # ---------- Очки ----------
 async def add_points(user_id: int, points: int):
@@ -287,6 +347,7 @@ async def reset_all_points():
         await db.execute('DELETE FROM user_points')
         await db.commit()
 
+# ---------- Удаление профиля ----------
 async def delete_profile(user_id: int):
     """Полностью удаляет профиль пользователя и все связанные записи."""
     async with aiosqlite.connect(DB_PATH) as db:

@@ -1,23 +1,28 @@
 import random
 import datetime
 import logging
+import aiosqlite  # <-- добавлено
 from aiogram import Router, F, Bot
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.exceptions import TelegramForbiddenError
+
 from data import (
     get_profile, create_meet_task, get_meet_task_by_id,
-    update_meet_task_status, add_points, get_active_meet_task_for_user
+    update_meet_task_status, add_points, get_active_meet_task_for_user,
+    update_meet_agreement, DB_PATH  # <-- добавлен DB_PATH
 )
 import config
 
 router = Router()
 
 def generate_location(institute: str) -> str:
+    """Генерирует место встречи в формате А-1 .. А-16."""
     return f"А-{random.randint(1, 16)}"
 
 async def create_meet_after_like(bot: Bot, user1_id: int, user2_id: int, initiator_id: int):
     """
-    Создаёт задание на встречу после взаимного лайка, если пользователи из одного института.
-    initiator_id — кто первый лайкнул (будет отправлять видео).
+    Создаёт предложение встречи после взаимного лайка.
+    Отправляет обоим пользователям кнопки для согласия/отказа.
     """
     profile1 = await get_profile(user1_id)
     profile2 = await get_profile(user2_id)
@@ -27,42 +32,144 @@ async def create_meet_after_like(bot: Bot, user1_id: int, user2_id: int, initiat
     institute1 = profile1.get('institute')
     institute2 = profile2.get('institute')
     if institute1 != institute2:
-        return  # разные институты — мит не предлагаем
+        return  # разные институты — встречу не предлагаем
 
-    # Генерируем место встречи
     location = generate_location(institute1)
-
-    # Дедлайн: через 24 часа
     deadline = datetime.datetime.now() + datetime.timedelta(hours=24)
 
-    # Создаём задание
+    # Создаём задание со статусом pending
     task_id = await create_meet_task(user1_id, user2_id, initiator_id, institute1, location, deadline)
 
-    # Определяем, кто инициатор
-    if initiator_id == user1_id:
-        initiator_name = profile1['name']
-        other_name = profile2['name']
-        other_id = user2_id
+    # Создаём инлайн-клавиатуру для каждого
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="✅ Пойти на встречу", callback_data=f"meet_agree_{task_id}"),
+            InlineKeyboardButton(text="❌ Отказаться", callback_data=f"meet_decline_{task_id}")
+        ]
+    ])
+
+    # Отправляем сообщения и сохраняем ID сообщений в задании
+    msg1 = await bot.send_message(
+        user1_id,
+        f"🎉 У вас взаимная симпатия с {profile2['name']}! "
+        f"Хотите встретиться в {location} в вашем институте?",
+        reply_markup=keyboard
+    )
+    msg2 = await bot.send_message(
+        user2_id,
+        f"🎉 У вас взаимная симпатия с {profile1['name']}! "
+        f"Хотите встретиться в {location} в вашем институте?",
+        reply_markup=keyboard
+    )
+
+    # Обновляем задание, добавляя ID сообщений
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute('UPDATE meet_tasks SET msg1_id = ?, msg2_id = ? WHERE id = ?', (msg1.message_id, msg2.message_id, task_id))
+        await db.commit()
+
+@router.callback_query(F.data.startswith("meet_agree_"))
+async def meet_agree_callback(callback: CallbackQuery, bot: Bot):
+    task_id = int(callback.data.split("_")[2])
+    user_id = callback.from_user.id
+
+    result = await update_meet_agreement(task_id, user_id, agreed=True)
+
+    if result is None:
+        await callback.answer("Задание не найдено или уже обработано.", show_alert=True)
+        return
+
+    # Убираем клавиатуру у ответившего
+    await callback.message.edit_reply_markup(reply_markup=None)
+
+    if result == 'both_agreed':
+        # Оба согласились — активируем этап видео
+        task = await get_meet_task_by_id(task_id)
+        if task:
+            # Определяем инициатора
+            if task['initiator_id'] == task['user1_id']:
+                initiator_id = task['user1_id']
+                other_id = task['user2_id']
+            else:
+                initiator_id = task['user2_id']
+                other_id = task['user1_id']
+
+            # Убираем клавиатуру у второго пользователя (если она ещё есть)
+            try:
+                await bot.edit_message_reply_markup(
+                    chat_id=other_id,
+                    message_id=task['msg2_id'] if other_id == task['user2_id'] else task['msg1_id'],
+                    reply_markup=None
+                )
+            except Exception as e:
+                logging.warning(f"Не удалось убрать клавиатуру у {other_id}: {e}")
+
+            # Отправляем инициатору задание на видео
+            await bot.send_message(
+                initiator_id,
+                f"🎉 Оба согласились на встречу! Вы должны в течение 24 часов отправить в этот чат видеосообщение (кружок) с места встречи {task['location']}. После этого администратор проверит и начислит очки."
+            )
+            await bot.send_message(
+                other_id,
+                f"🎉 Оба согласились на встречу! Ожидайте, {(await get_profile(initiator_id))['name']} отправит видео для подтверждения."
+            )
+        await callback.answer("Вы согласились на встречу! Ожидаем ответ второго участника.")
+    elif result == 'agreed':
+        await callback.answer("Вы согласились на встречу! Ожидаем ответ второго участника.")
+    elif result == 'declined':
+        # Этот случай не должен произойти при agreed=True, но на всякий случай
+        await callback.answer("Ошибка.")
     else:
-        initiator_name = profile2['name']
-        other_name = profile1['name']
-        other_id = user1_id
+        await callback.answer("Что-то пошло не так.")
 
-    # Сообщение для инициатора
-    await bot.send_message(
-        initiator_id,
-        f"🎉 У вас взаимная симпатия с {other_name}! Чтобы получить очки, встретьтесь в институте {institute1}, место: {location}. "
-        f"Вы должны в течение 24 часов отправить в этот чат видеосообщение (кружок) с места встречи. После этого администратор проверит и начислит очки."
-    )
+@router.callback_query(F.data.startswith("meet_decline_"))
+async def meet_decline_callback(callback: CallbackQuery, bot: Bot):
+    task_id = int(callback.data.split("_")[2])
+    user_id = callback.from_user.id
 
-    # Сообщение для второго
-    await bot.send_message(
-        other_id,
-        f"🎉 У вас взаимная симпатия с {initiator_name}! Для получения очков встретьтесь в институте {institute1}, место: {location}. "
-        f"{initiator_name} отправит видеоподтверждение. Ожидайте."
-    )
+    result = await update_meet_agreement(task_id, user_id, agreed=False)
 
-@router.message(F.video_note)
+    if result is None:
+        await callback.answer("Задание не найдено или уже обработано.", show_alert=True)
+        return
+
+    # Убираем клавиатуру у ответившего
+    await callback.message.edit_reply_markup(reply_markup=None)
+
+    if result == 'declined':
+        # Отказ, уведомляем обоих
+        task = await get_meet_task_by_id(task_id)
+        if task:
+            # Получаем имена
+            profile1 = await get_profile(task['user1_id'])
+            profile2 = await get_profile(task['user2_id'])
+            name1 = profile1['name'] if profile1 else "Пользователь"
+            name2 = profile2['name'] if profile2 else "Пользователь"
+
+            # Убираем клавиатуру у второго
+            other_id = task['user2_id'] if task['user1_id'] == user_id else task['user1_id']
+            try:
+                await bot.edit_message_reply_markup(
+                    chat_id=other_id,
+                    message_id=task['msg2_id'] if other_id == task['user2_id'] else task['msg1_id'],
+                    reply_markup=None
+                )
+            except Exception as e:
+                logging.warning(f"Не удалось убрать клавиатуру у {other_id}: {e}")
+
+            # Отправляем сообщение об отказе
+            decliner_name = name1 if task['user1_id'] == user_id else name2
+            await bot.send_message(
+                task['user1_id'],
+                f"❌ {decliner_name} отказался от встречи. Встреча отменена."
+            )
+            await bot.send_message(
+                task['user2_id'],
+                f"❌ {decliner_name} отказался от встречи. Встреча отменена."
+            )
+        await callback.answer("Вы отказались от встречи.")
+    else:
+        await callback.answer("Ошибка.")
+
 async def handle_video_message(message: Message, bot: Bot):
     """Обработчик видеосообщений (кружков)"""
     user_id = message.from_user.id
@@ -72,21 +179,24 @@ async def handle_video_message(message: Message, bot: Bot):
         await message.answer("У вас нет активных заданий на отправку видео.")
         return
 
+    # Проверяем наличие администраторов
     if not config.ADMIN_IDS:
-        await message.answer("Ошибка: не назначен администратор.")
-        logging.error("Нет администраторов для обработки видео.")
+        await message.answer("Ошибка: не назначен администратор для проверки.")
         return
 
-    # Пересылаем видео администратору
-    admin_id = config.ADMIN_IDS[0]  # предполагаем, что хотя бы один админ есть
-    forwarded = await bot.send_video_note(
+    admin_id = config.ADMIN_IDS[0]
+
+    # Отправляем администратору текстовое уведомление
+    await bot.send_message(
         admin_id,
-        message.video_note.file_id,
-        caption=f"📹 Видеоподтверждение от пользователя {user_id} для задания #{task['id']}"
+        f"📹 Видеоподтверждение от пользователя {user_id} для задания #{task['id']}"
     )
 
-    # Сохраняем message_id пересланного сообщения
-    await update_meet_task_status(task['id'], 'waiting_admin', video_message_id=forwarded.message_id)
+    # Пересылаем видеокружок (без caption)
+    video_msg = await bot.send_video_note(admin_id, message.video_note.file_id)
+
+    # Сохраняем message_id пересланного видео
+    await update_meet_task_status(task['id'], 'waiting_admin', video_message_id=video_msg.message_id)
 
     # Отправляем админу инлайн-кнопки для подтверждения
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -103,14 +213,17 @@ async def handle_video_message(message: Message, bot: Bot):
 
     await message.answer("Видео отправлено администратору. Ожидайте подтверждения.")
 
+@router.message(F.video_note)
+async def video_note_handler(message: Message, bot: Bot):
+    await handle_video_message(message, bot)
+
 @router.callback_query(F.data.startswith("confirm_meet_"))
 async def admin_confirm_meet(callback: CallbackQuery, bot: Bot):
     """Подтверждение встречи администратором"""
-    await callback.answer()
     task_id = int(callback.data.split("_")[2])
     task = await get_meet_task_by_id(task_id)
     if not task or task['status'] != 'waiting_admin':
-        await callback.message.answer("Задание не найдено или уже обработано.")
+        await callback.answer("Задание не найдено или уже обработано.", show_alert=True)
         return
 
     # Начисляем очки обоим пользователям
@@ -126,18 +239,24 @@ async def admin_confirm_meet(callback: CallbackQuery, bot: Bot):
 
     # Удаляем кнопки у сообщения админа
     try:
-        await callback.message.edit_reply_markup(reply_markup=None)
-    except:
-        pass
+        await bot.edit_message_reply_markup(
+            chat_id=callback.message.chat.id,
+            message_id=task['video_message_id'],
+            reply_markup=None
+        )
+    except Exception as e:
+        logging.warning(f"Не удалось удалить кнопки у видео: {e}")
+
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await callback.answer("Встреча подтверждена, очки начислены.")
 
 @router.callback_query(F.data.startswith("decline_meet_"))
 async def admin_decline_meet(callback: CallbackQuery, bot: Bot):
     """Отказ администратора"""
-    await callback.answer()
     task_id = int(callback.data.split("_")[2])
     task = await get_meet_task_by_id(task_id)
     if not task or task['status'] != 'waiting_admin':
-        await callback.message.answer("Задание не найдено или уже обработано.")
+        await callback.answer("Задание не найдено или уже обработано.", show_alert=True)
         return
 
     await update_meet_task_status(task_id, 'declined', admin_decision=0)
@@ -146,6 +265,13 @@ async def admin_decline_meet(callback: CallbackQuery, bot: Bot):
     await bot.send_message(task['user2_id'], "❌ Встреча не подтверждена.")
 
     try:
-        await callback.message.edit_reply_markup(reply_markup=None)
-    except:
-        pass
+        await bot.edit_message_reply_markup(
+            chat_id=callback.message.chat.id,
+            message_id=task['video_message_id'],
+            reply_markup=None
+        )
+    except Exception as e:
+        logging.warning(f"Не удалось удалить кнопки у видео: {e}")
+
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await callback.answer("Встреча отклонена.")
