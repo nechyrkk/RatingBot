@@ -82,10 +82,15 @@ async def cmd_stats(message: Message, bot: Bot):
                 row = await cursor.fetchone()
                 if row:
                     gender = row[0]
-                    rating = await get_user_rating(uid)  # получаем рейтинг
-                    # Форматируем рейтинг: если целое число, то без дробной части
-                    rating_str = f"{rating:.2f}" if rating % 1 != 0 else f"{int(rating)}"
-                    line = f"{rating_str} {display}"
+                    rating = await get_user_rating(uid)
+                    if rating == 1.0:
+                        rating_display = "1⭐ (начальный)"
+                    else:
+                        if rating.is_integer():
+                            rating_display = f"{int(rating)}⭐"
+                        else:
+                            rating_display = f"{rating:.2f}⭐"
+                    line = f"{rating_display} {display}"
                     if gender == "Парень":
                         male_users.append(line)
                     else:

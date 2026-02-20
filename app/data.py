@@ -149,6 +149,10 @@ async def get_user_stats() -> Dict[str, Any]:
         return {'total': total, 'gender': gender_stats}
 
 async def get_all_usernames(bot: Bot) -> dict:
+    """
+    Возвращает словарь {user_id: отображаемая строка с именем и username}.
+    Формат: "Имя (@username)" или "Имя (нет username)" или "Имя (чат недоступен)"
+    """
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute('SELECT user_id, name FROM profiles') as cursor:
             rows = await cursor.fetchall()
@@ -157,7 +161,7 @@ async def get_all_usernames(bot: Bot) -> dict:
                 try:
                     chat = await bot.get_chat(user_id)
                     if chat.username:
-                        display = f"@{chat.username}"
+                        display = f"{name} (@{chat.username})"
                     else:
                         display = f"{name} (нет username)"
                 except Exception:
