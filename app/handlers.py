@@ -23,7 +23,8 @@ from data import (
     save_profile, get_profile, get_all_profiles,
     add_like, add_dislike, get_ratings,
     get_user_stats, get_all_usernames,
-    DB_PATH, delete_profile, INSTITUTES
+    DB_PATH, delete_profile, INSTITUTES,
+    get_top_users
 )
 
 router = Router()
@@ -964,6 +965,24 @@ async def cmd_my_rating(message: Message):
         else:
             rating_display = f"{rating:.2f} ⭐"
         await message.answer(f"⭐ Ваш текущий рейтинг: **{rating_display}**", parse_mode="Markdown")
+
+@router.message(F.text == "Топ встреч")
+async def cmd_top_meets(message: Message):
+    user_id = message.from_user.id
+    top_users = await get_top_users(limit=10)  # получаем топ-10 за текущий месяц
+
+    if not top_users:
+        await message.answer("Пока никто не участвовал во встречах в этом месяце.")
+        return
+
+    lines = []
+    for idx, (uid, points) in enumerate(top_users, 1):
+        profile = await get_profile(uid)
+        name = profile['name'] if profile else f"Пользователь {uid}"
+        lines.append(f"{idx}. {name} — {points} очков")
+
+    text = "🏆 **Топ встреч за текущий месяц:**\n\n" + "\n".join(lines)
+    await message.answer(text, parse_mode="Markdown")
 
 # --------------------- ОБРАБОТКА НЕКОРРЕКТНЫХ СООБЩЕНИЙ ---------------------
 @router.message(CreateProfile.waiting_for_name)
