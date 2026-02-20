@@ -58,31 +58,25 @@ async def get_next_profile(user_id: int, state_data: dict) -> (int, dict):
         state_data['current_pool'] = 'new'  # начинаем с новых
 
     # Если в текущем пуле есть элементы
-    if state_data['current_pool'] == 'new' and state_data['new_pool']:
-        # Берём случайный из новых
-        next_id = random.choice(state_data['new_pool'])
-        state_data['new_pool'].remove(next_id)
-        return next_id, state_data
-
-    # Если новые кончились, переключаемся на дизлайкнутые
-    if state_data['current_pool'] == 'new' and not state_data['new_pool']:
-        state_data['current_pool'] = 'disliked'
-
-    # Работа с дизлайкнутыми
     if state_data['current_pool'] == 'disliked':
         if state_data['disliked_pool']:
             next_id = random.choice(state_data['disliked_pool'])
             state_data['disliked_pool'].remove(next_id)
             return next_id, state_data
         else:
-            # Все дизлайкнутые показаны – сбрасываем пул дизлайков (начинаем цикл заново)
-            # Но сначала нужно перезагрузить из БД, чтобы учесть новые дизлайки
-            _, disliked_ids = await get_profile_pools(user_id)
+            # Дизлайкнутые закончились – перезагружаем оба пула и начинаем заново с new
+            new_ids, disliked_ids = await get_profile_pools(user_id)
+            state_data['new_pool'] = new_ids
             state_data['disliked_pool'] = disliked_ids
-            if state_data['disliked_pool']:
+            state_data['current_pool'] = 'new'
+            # Теперь пробуем взять из new_pool
+            if state_data['new_pool']:
+                next_id = random.choice(state_data['new_pool'])
+                state_data['new_pool'].remove(next_id)
+                return next_id, state_data
+            elif state_data['disliked_pool']:
                 next_id = random.choice(state_data['disliked_pool'])
                 state_data['disliked_pool'].remove(next_id)
                 return next_id, state_data
             else:
-                # Даже дизлайкнутых нет – значит совсем никого
                 return None, state_data
