@@ -4,11 +4,10 @@ from aiogram import Router, F, Bot
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, CallbackQuery, InputMediaPhoto
-from aiogram.exceptions import TelegramForbiddenError, TelegramBadRequest
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 import aiosqlite
 import config
-from meetings import router as meet_router
-from meetings import create_meet_after_like
+from meetings import create_meet_after_like, router as meet_router
 from matching import get_next_profile
 from rating_system import get_user_rating, add_rating, get_voter_weight
 from states import CreateProfile, EditProfile, BrowseProfiles, SuperLike
@@ -22,9 +21,8 @@ from keyboards import (
 from data import (
     save_profile, get_profile, get_all_profiles,
     add_like, add_dislike, get_ratings,
-    get_user_stats, get_all_usernames,
-    DB_PATH, delete_profile, INSTITUTES,
-    get_top_users
+    get_user_stats, get_all_usernames, get_top_users,
+    DB_PATH, delete_profile, INSTITUTES
 )
 
 router = Router()
@@ -45,7 +43,8 @@ def is_compatible(liker_gender: str, target_interests: str) -> bool:
 async def cmd_start(message: Message):
     user_id = message.from_user.id
     is_admin = (user_id in config.ADMIN_IDS)
-    keyboard = get_admin_keyboard() if is_admin else get_main_keyboard()
+    has_profile = await get_profile(user_id) is not None
+    keyboard = get_admin_keyboard(has_profile) if is_admin else get_main_keyboard(has_profile)
     await message.answer(
         "Привет! Я помогу создать анкету и найти знакомства.\n"
         "Используй кнопки ниже или команды:\n"
@@ -67,20 +66,17 @@ async def cmd_stats(message: Message, bot: Bot):
         await message.answer("У вас нет прав на просмотр статистики.")
         return
 
-    # Получаем общую статистику
     stats = await get_user_stats()
     total = stats['total']
     gender_stats = stats['gender']
     male = gender_stats.get('Парень', 0)
     female = gender_stats.get('Девушка', 0)
 
-    # Получаем словарь {user_id: отображаемое имя}
     all_usernames = await get_all_usernames(bot)
 
     male_users = []
     female_users = []
 
-    # Для каждого пользователя получаем его пол и рейтинг
     async with aiosqlite.connect(DB_PATH) as db:
         for uid, display in all_usernames.items():
             async with db.execute('SELECT gender FROM profiles WHERE user_id = ?', (uid,)) as cursor:
@@ -101,7 +97,6 @@ async def cmd_stats(message: Message, bot: Bot):
                     else:
                         female_users.append(line)
 
-    # Формируем текст
     text = f"📊 **Статистика пользователей:**\n\n" \
            f"Всего анкет: {total}\n" \
            f"Парней: {male}\n" \
@@ -112,7 +107,6 @@ async def cmd_stats(message: Message, bot: Bot):
     if female_users:
         text += "👩 **Девушки:**\n" + "\n".join(female_users)
 
-    # Отправляем с обработкой длинных сообщений и ошибок Markdown
     if len(text) > 4096:
         parts = [text[i:i + 4096] for i in range(0, len(text), 4096)]
         for part in parts:
@@ -126,6 +120,23 @@ async def cmd_stats(message: Message, bot: Bot):
         except Exception:
             await message.answer(text, parse_mode=None)
 
+# --------------------- ТОП ВСТРЕЧ ---------------------
+@router.message(F.text == "Топ встреч")
+async def cmd_top_meets(message: Message):
+    top_users = await get_top_users(limit=10)
+    if not top_users:
+        await message.answer("Пока никто не участвовал во встречах в этом месяце.")
+        return
+
+    lines = []
+    for idx, (uid, points) in enumerate(top_users, 1):
+        profile = await get_profile(uid)
+        name = profile['name'] if profile else f"Пользователь {uid}"
+        lines.append(f"{idx}. {name} — {points} очков")
+
+    text = "🏆 **Топ встреч за текущий месяц:**\n\n" + "\n".join(lines)
+    await message.answer(text, parse_mode="Markdown")
+
 # --------------------- ОТМЕНА ---------------------
 @router.message(Command("cancel"))
 @router.message(F.text.casefold() == "отмена")
@@ -135,21 +146,29 @@ async def cmd_cancel(message: Message, state: FSMContext):
         await message.answer("Нет активного действия.")
         return
     await state.clear()
-    is_admin = (message.from_user.id in config.ADMIN_IDS)
-    keyboard = get_admin_keyboard() if is_admin else get_main_keyboard()
+    user_id = message.from_user.id
+    is_admin = (user_id in config.ADMIN_IDS)
+    has_profile = await get_profile(user_id) is not None
+    keyboard = get_admin_keyboard(has_profile) if is_admin else get_main_keyboard(has_profile)
     await message.answer("Действие отменено.", reply_markup=keyboard)
 
 @router.message(F.text == "Назад в меню")
 async def back_to_menu_general(message: Message, state: FSMContext):
     await state.clear()
-    is_admin = (message.from_user.id in config.ADMIN_IDS)
-    keyboard = get_admin_keyboard() if is_admin else get_main_keyboard()
+    user_id = message.from_user.id
+    is_admin = (user_id in config.ADMIN_IDS)
+    has_profile = await get_profile(user_id) is not None
+    keyboard = get_admin_keyboard(has_profile) if is_admin else get_main_keyboard(has_profile)
     await message.answer("Главное меню", reply_markup=keyboard)
 
 # --------------------- СОЗДАНИЕ АНКЕТЫ ---------------------
 @router.message(Command("create"))
 @router.message(F.text == "Создать анкету")
 async def cmd_create(message: Message, state: FSMContext):
+    user_id = message.from_user.id
+    if await get_profile(user_id):
+        await message.answer("У вас уже есть анкета. Используйте /edit для редактирования.")
+        return
     await state.set_state(CreateProfile.waiting_for_name)
     await message.answer(
         "Давай создадим анкету!\n"
@@ -178,47 +197,32 @@ async def process_age(message: Message, state: FSMContext):
         return
     await state.update_data(age=age)
     await state.set_state(CreateProfile.waiting_for_gender)
-    await message.answer(
-        "Выберите ваш пол:",
-        reply_markup=get_gender_keyboard()
-    )
+    await message.answer("Выберите ваш пол:", reply_markup=get_gender_keyboard())
 
 @router.message(CreateProfile.waiting_for_gender, F.text.in_(["Парень", "Девушка"]))
 async def process_gender(message: Message, state: FSMContext):
     gender = message.text
     await state.update_data(gender=gender)
     await state.set_state(CreateProfile.waiting_for_interests)
-    await message.answer(
-        "Кто вас интересует?",
-        reply_markup=get_interests_keyboard()
-    )
+    await message.answer("Кто вас интересует?", reply_markup=get_interests_keyboard())
 
 @router.message(CreateProfile.waiting_for_interests, F.text.in_(["Парни", "Девушки", "Все"]))
 async def process_interests(message: Message, state: FSMContext):
     interests = message.text
     await state.update_data(interests=interests)
-    await state.set_state(CreateProfile.waiting_for_institute)   # новый шаг
-    await message.answer(
-        "Выберите ваш институт:",
-        reply_markup=get_institute_keyboard()
-    )
+    await state.set_state(CreateProfile.waiting_for_institute)
+    await message.answer("Выберите ваш институт:", reply_markup=get_institute_keyboard())
 
 @router.message(CreateProfile.waiting_for_institute, F.text.in_(INSTITUTES))
 async def process_institute(message: Message, state: FSMContext):
     institute = message.text
     await state.update_data(institute=institute)
     await state.set_state(CreateProfile.waiting_for_description)
-    await message.answer(
-        "Напишите описание о себе:",
-        reply_markup=remove_keyboard
-    )
+    await message.answer("Напишите описание о себе:", reply_markup=remove_keyboard)
 
 @router.message(CreateProfile.waiting_for_institute)
 async def handle_invalid_institute(message: Message):
-    await message.answer(
-        "Пожалуйста, выберите институт из списка кнопок.",
-        reply_markup=get_institute_keyboard()
-    )
+    await message.answer("Пожалуйста, выберите институт из списка кнопок.", reply_markup=get_institute_keyboard())
 
 @router.message(CreateProfile.waiting_for_description)
 async def process_description(message: Message, state: FSMContext):
@@ -238,19 +242,13 @@ async def process_description(message: Message, state: FSMContext):
 async def process_photo(message: Message, state: FSMContext, bot: Bot):
     data = await state.get_data()
     photos = data.get('photos', [])
-
     file_id = message.photo[-1].file_id
     photos.append(file_id)
-
     await state.update_data(photos=photos)
-
     if len(photos) >= MAX_PHOTOS:
         await finish_creation(message, state, bot)
     else:
-        await message.answer(
-            f"Фото добавлено ({len(photos)}/{MAX_PHOTOS}). "
-            f"Можете добавить ещё или нажать 'Готово'."
-        )
+        await message.answer(f"Фото добавлено ({len(photos)}/{MAX_PHOTOS}). Можете добавить ещё или нажать 'Готово'.")
 
 @router.message(CreateProfile.waiting_for_photos, F.text.casefold() == "готово")
 @router.message(CreateProfile.waiting_for_photos, Command("done"))
@@ -268,7 +266,7 @@ async def finish_creation(message: Message, state: FSMContext, bot: Bot):
     age = data['age']
     gender = data['gender']
     interests = data['interests']
-    institute = data.get('institute', 'ИИТ')   # если не выбрали, ставим ИИТ по умолчанию
+    institute = data.get('institute', 'ИИТ')
     description = data['description']
     photos = data['photos']
 
@@ -298,58 +296,29 @@ async def show_profile(message: Message, user_id: int, edit_mode: bool = False):
 
     text = f"📝 **Ваша анкета:**\nИмя: {name}\nВозраст: {age}\nОписание: {description}"
 
-    if not photos:
-        await message.answer(text, parse_mode="Markdown")
-        return
-
-    # Пытаемся отправить медиагруппой
-    if len(photos) > 1:
-        media_group = []
-        for i, file_id in enumerate(photos):
-            if i == 0:
-                media_group.append(InputMediaPhoto(media=file_id, caption=text, parse_mode="Markdown"))
-            else:
-                media_group.append(InputMediaPhoto(media=file_id))
-        try:
-            await message.answer_media_group(media=media_group)
-        except TelegramBadRequest as e:
-            logging.error(f"Ошибка отправки медиагруппы для {user_id}: {e}. Пробуем отправить по одному.")
-            # Отправляем по одному
-            # Сначала отправляем текст отдельно
+    try:
+        if not photos:
             await message.answer(text, parse_mode="Markdown")
-            valid_photos = []
-            for file_id in photos:
-                try:
-                    await message.answer_photo(photo=file_id)
-                    valid_photos.append(file_id)
-                except TelegramBadRequest:
-                    logging.warning(f"Недействительный file_id {file_id} для пользователя {user_id}, пропускаем")
-            # Если все фото битые, предложить обновить
-            if not valid_photos:
-                await message.answer("⚠️ Ваши фотографии повреждены. Пожалуйста, обновите их через редактирование анкеты.")
-            # Сохраняем только валидные фото обратно в профиль
-            if len(valid_photos) != len(photos):
-                profile['photos'] = valid_photos
-                await save_profile(user_id, profile['name'], profile['age'], profile['gender'],
-                                   profile['interests'], profile['institute'],
-                                   profile['description'], valid_photos)
-    else:
-        # Одно фото
-        try:
+        elif len(photos) == 1:
             await message.answer_photo(photo=photos[0], caption=text, parse_mode="Markdown")
-        except TelegramBadRequest:
-            logging.warning(f"Недействительный file_id {photos[0]} для пользователя {user_id}")
-            await message.answer(text, parse_mode="Markdown")
-            await message.answer("⚠️ Ваше фото повреждено. Пожалуйста, обновите его через редактирование анкеты.")
-            # Удаляем фото из профиля
-            profile['photos'] = []
-            await save_profile(user_id, profile['name'], profile['age'], profile['gender'],
-                               profile['interests'], profile['institute'],
-                               profile['description'], [])
+        else:
+            media_group = []
+            for i, file_id in enumerate(photos):
+                if i == 0:
+                    media_group.append(InputMediaPhoto(media=file_id, caption=text, parse_mode="Markdown"))
+                else:
+                    media_group.append(InputMediaPhoto(media=file_id))
+            await message.answer_media_group(media=media_group)
+    except TelegramBadRequest as e:
+        logging.error(f"Ошибка отправки фото для user {user_id}: {e}")
+        await message.answer(f"{text}\n\n⚠️ Некоторые фото повреждены, обновите их.", parse_mode="Markdown")
+        profile['photos'] = []
+        await save_profile(user_id, name, age, profile['gender'], profile['interests'], profile['institute'], description, [])
 
     if not edit_mode:
-        is_admin = (message.from_user.id in config.ADMIN_IDS)
-        keyboard = get_admin_keyboard() if is_admin else get_main_keyboard()
+        is_admin = (user_id in config.ADMIN_IDS)
+        has_profile = True
+        keyboard = get_admin_keyboard(has_profile) if is_admin else get_main_keyboard(has_profile)
         await message.answer("Что хотите сделать дальше?", reply_markup=keyboard)
 
 # --------------------- РЕДАКТИРОВАНИЕ ---------------------
@@ -359,23 +328,26 @@ async def cmd_edit(message: Message, state: FSMContext):
     user_id = message.from_user.id
     profile = await get_profile(user_id)
     if not profile:
-        await message.answer("Сначала создайте анкету.", reply_markup=get_main_keyboard())
+        await message.answer("Сначала создайте анкету.", reply_markup=get_main_keyboard(False))
         return
 
     await state.set_state(EditProfile.choosing_field)
-    await message.answer(
-        "Выберите, что хотите изменить:",
-        reply_markup=get_edit_keyboard()
-    )
+    await message.answer("Выберите, что хотите изменить:", reply_markup=get_edit_keyboard())
 
-@router.message(EditProfile.choosing_field, F.text.in_(["Изменить имя", "Изменить возраст", "Изменить пол", "Изменить интересы", "Изменить описание", "Изменить фото", "Изменить институт","Пересоздать анкету", "Назад"]))
+@router.message(EditProfile.choosing_field, F.text.in_([
+    "Изменить имя", "Изменить возраст", "Изменить пол", "Изменить интересы",
+    "Изменить описание", "Изменить фото", "Изменить институт",
+    "Пересоздать анкету", "Назад"
+]))
 async def process_edit_choice(message: Message, state: FSMContext):
     choice = message.text
 
     if choice == "Назад":
         await state.clear()
-        is_admin = (message.from_user.id in config.ADMIN_IDS)
-        keyboard = get_admin_keyboard() if is_admin else get_main_keyboard()
+        user_id = message.from_user.id
+        is_admin = (user_id in config.ADMIN_IDS)
+        has_profile = True
+        keyboard = get_admin_keyboard(has_profile) if is_admin else get_main_keyboard(has_profile)
         await message.answer("Главное меню", reply_markup=keyboard)
         return
 
@@ -408,10 +380,9 @@ async def process_edit_choice(message: Message, state: FSMContext):
         )
     elif choice == "Изменить институт":
         await state.set_state(EditProfile.waiting_for_new_institute)
-        await message.answer(
-            "Выберите новый институт:",
-            reply_markup=get_institute_keyboard()
-        )
+        await message.answer("Выберите новый институт:", reply_markup=get_institute_keyboard())
+
+# ---- Обработчики изменения полей ----
 @router.message(EditProfile.waiting_for_new_name)
 async def process_new_name(message: Message, state: FSMContext):
     new_name = message.text.strip()
@@ -423,15 +394,18 @@ async def process_new_name(message: Message, state: FSMContext):
     profile = await get_profile(user_id)
     if not profile:
         await state.clear()
-        await message.answer("Ошибка. Анкета не найдена.", reply_markup=get_main_keyboard())
+        await message.answer("Ошибка. Анкета не найдена.", reply_markup=get_main_keyboard(False))
         return
 
     profile['name'] = new_name
-    await save_profile(user_id, profile['name'], profile['age'], profile['gender'], profile['interests'], profile['description'], profile['photos'])
+    await save_profile(user_id, profile['name'], profile['age'], profile['gender'],
+                       profile['interests'], profile['institute'],
+                       profile['description'], profile['photos'])
 
     await state.clear()
     is_admin = (user_id in config.ADMIN_IDS)
-    keyboard = get_admin_keyboard() if is_admin else get_main_keyboard()
+    has_profile = True
+    keyboard = get_admin_keyboard(has_profile) if is_admin else get_main_keyboard(has_profile)
     await message.answer("Имя обновлено!", reply_markup=keyboard)
     await show_profile(message, user_id, edit_mode=True)
 
@@ -449,15 +423,18 @@ async def process_new_age(message: Message, state: FSMContext):
     profile = await get_profile(user_id)
     if not profile:
         await state.clear()
-        await message.answer("Ошибка. Анкета не найдена.", reply_markup=get_main_keyboard())
+        await message.answer("Ошибка. Анкета не найдена.", reply_markup=get_main_keyboard(False))
         return
 
     profile['age'] = new_age
-    await save_profile(user_id, profile['name'], profile['age'], profile['gender'], profile['interests'], profile['description'], profile['photos'])
+    await save_profile(user_id, profile['name'], profile['age'], profile['gender'],
+                       profile['interests'], profile['institute'],
+                       profile['description'], profile['photos'])
 
     await state.clear()
     is_admin = (user_id in config.ADMIN_IDS)
-    keyboard = get_admin_keyboard() if is_admin else get_main_keyboard()
+    has_profile = True
+    keyboard = get_admin_keyboard(has_profile) if is_admin else get_main_keyboard(has_profile)
     await message.answer("Возраст обновлён!", reply_markup=keyboard)
     await show_profile(message, user_id, edit_mode=True)
 
@@ -468,15 +445,18 @@ async def process_new_gender(message: Message, state: FSMContext):
     profile = await get_profile(user_id)
     if not profile:
         await state.clear()
-        await message.answer("Ошибка. Анкета не найдена.", reply_markup=get_main_keyboard())
+        await message.answer("Ошибка. Анкета не найдена.", reply_markup=get_main_keyboard(False))
         return
 
     profile['gender'] = new_gender
-    await save_profile(user_id, profile['name'], profile['age'], profile['gender'], profile['interests'], profile['description'], profile['photos'])
+    await save_profile(user_id, profile['name'], profile['age'], profile['gender'],
+                       profile['interests'], profile['institute'],
+                       profile['description'], profile['photos'])
 
     await state.clear()
     is_admin = (user_id in config.ADMIN_IDS)
-    keyboard = get_admin_keyboard() if is_admin else get_main_keyboard()
+    has_profile = True
+    keyboard = get_admin_keyboard(has_profile) if is_admin else get_main_keyboard(has_profile)
     await message.answer("Пол обновлён!", reply_markup=keyboard)
     await show_profile(message, user_id, edit_mode=True)
 
@@ -487,15 +467,18 @@ async def process_new_interests(message: Message, state: FSMContext):
     profile = await get_profile(user_id)
     if not profile:
         await state.clear()
-        await message.answer("Ошибка. Анкета не найдена.", reply_markup=get_main_keyboard())
+        await message.answer("Ошибка. Анкета не найдена.", reply_markup=get_main_keyboard(False))
         return
 
     profile['interests'] = new_interests
-    await save_profile(user_id, profile['name'], profile['age'], profile['gender'], profile['interests'], profile['description'], profile['photos'])
+    await save_profile(user_id, profile['name'], profile['age'], profile['gender'],
+                       profile['interests'], profile['institute'],
+                       profile['description'], profile['photos'])
 
     await state.clear()
     is_admin = (user_id in config.ADMIN_IDS)
-    keyboard = get_admin_keyboard() if is_admin else get_main_keyboard()
+    has_profile = True
+    keyboard = get_admin_keyboard(has_profile) if is_admin else get_main_keyboard(has_profile)
     await message.answer("Интересы обновлены!", reply_markup=keyboard)
     await show_profile(message, user_id, edit_mode=True)
 
@@ -510,35 +493,20 @@ async def process_new_description(message: Message, state: FSMContext):
     profile = await get_profile(user_id)
     if not profile:
         await state.clear()
-        await message.answer("Ошибка. Анкета не найдена.", reply_markup=get_main_keyboard())
+        await message.answer("Ошибка. Анкета не найдена.", reply_markup=get_main_keyboard(False))
         return
 
     profile['description'] = new_description
-    await save_profile(user_id, profile['name'], profile['age'], profile['gender'], profile['interests'], profile['description'], profile['photos'])
+    await save_profile(user_id, profile['name'], profile['age'], profile['gender'],
+                       profile['interests'], profile['institute'],
+                       profile['description'], profile['photos'])
 
     await state.clear()
     is_admin = (user_id in config.ADMIN_IDS)
-    keyboard = get_admin_keyboard() if is_admin else get_main_keyboard()
+    has_profile = True
+    keyboard = get_admin_keyboard(has_profile) if is_admin else get_main_keyboard(has_profile)
     await message.answer("Описание обновлено!", reply_markup=keyboard)
     await show_profile(message, user_id, edit_mode=True)
-
-@router.message(EditProfile.waiting_for_new_photos, F.photo)
-async def process_new_photo(message: Message, state: FSMContext):
-    data = await state.get_data()
-    new_photos = data.get('new_photos', [])
-
-    file_id = message.photo[-1].file_id
-    new_photos.append(file_id)
-
-    await state.update_data(new_photos=new_photos)
-
-    if len(new_photos) >= MAX_PHOTOS:
-        await finish_edit_photos(message, state)
-    else:
-        await message.answer(
-            f"Фото добавлено ({len(new_photos)}/{MAX_PHOTOS}). "
-            f"Можете добавить ещё или нажать 'Готово'."
-        )
 
 @router.message(EditProfile.waiting_for_new_institute, F.text.in_(INSTITUTES))
 async def process_new_institute(message: Message, state: FSMContext):
@@ -547,7 +515,7 @@ async def process_new_institute(message: Message, state: FSMContext):
     profile = await get_profile(user_id)
     if not profile:
         await state.clear()
-        await message.answer("Ошибка. Анкета не найдена.", reply_markup=get_main_keyboard())
+        await message.answer("Ошибка. Анкета не найдена.", reply_markup=get_main_keyboard(False))
         return
 
     profile['institute'] = new_institute
@@ -557,16 +525,26 @@ async def process_new_institute(message: Message, state: FSMContext):
 
     await state.clear()
     is_admin = (user_id in config.ADMIN_IDS)
-    keyboard = get_admin_keyboard() if is_admin else get_main_keyboard()
+    has_profile = True
+    keyboard = get_admin_keyboard(has_profile) if is_admin else get_main_keyboard(has_profile)
     await message.answer("Институт обновлён!", reply_markup=keyboard)
     await show_profile(message, user_id, edit_mode=True)
 
 @router.message(EditProfile.waiting_for_new_institute)
 async def handle_invalid_new_institute(message: Message):
-    await message.answer(
-        "Пожалуйста, выберите институт из списка кнопок.",
-        reply_markup=get_institute_keyboard()
-    )
+    await message.answer("Пожалуйста, выберите институт из списка кнопок.", reply_markup=get_institute_keyboard())
+
+@router.message(EditProfile.waiting_for_new_photos, F.photo)
+async def process_new_photo(message: Message, state: FSMContext):
+    data = await state.get_data()
+    new_photos = data.get('new_photos', [])
+    file_id = message.photo[-1].file_id
+    new_photos.append(file_id)
+    await state.update_data(new_photos=new_photos)
+    if len(new_photos) >= MAX_PHOTOS:
+        await finish_edit_photos(message, state)
+    else:
+        await message.answer(f"Фото добавлено ({len(new_photos)}/{MAX_PHOTOS}). Можете добавить ещё или нажать 'Готово'.")
 
 @router.message(EditProfile.waiting_for_new_photos, F.text.casefold() == "готово")
 @router.message(EditProfile.waiting_for_new_photos, Command("done"))
@@ -574,7 +552,7 @@ async def done_edit_photos(message: Message, state: FSMContext):
     data = await state.get_data()
     new_photos = data.get('new_photos', [])
     if not new_photos:
-        await message.answer("Вы не загрузили ни одного фото. Операция отменена.", reply_markup=get_main_keyboard())
+        await message.answer("Вы не загрузили ни одного фото. Операция отменена.", reply_markup=get_main_keyboard(True))
         await state.clear()
         return
     await finish_edit_photos(message, state)
@@ -582,24 +560,26 @@ async def done_edit_photos(message: Message, state: FSMContext):
 async def finish_edit_photos(message: Message, state: FSMContext):
     data = await state.get_data()
     new_photos = data.get('new_photos', [])
-
     user_id = message.from_user.id
     profile = await get_profile(user_id)
     if not profile:
         await state.clear()
-        await message.answer("Ошибка. Анкета не найдена.", reply_markup=get_main_keyboard())
+        await message.answer("Ошибка. Анкета не найдена.", reply_markup=get_main_keyboard(False))
         return
 
     profile['photos'] = new_photos
-    await save_profile(user_id, profile['name'], profile['age'], profile['gender'], profile['interests'], profile['description'], profile['photos'])
+    await save_profile(user_id, profile['name'], profile['age'], profile['gender'],
+                       profile['interests'], profile['institute'],
+                       profile['description'], profile['photos'])
 
     await state.clear()
     is_admin = (user_id in config.ADMIN_IDS)
-    keyboard = get_admin_keyboard() if is_admin else get_main_keyboard()
+    has_profile = True
+    keyboard = get_admin_keyboard(has_profile) if is_admin else get_main_keyboard(has_profile)
     await message.answer("Фотографии обновлены!", reply_markup=keyboard)
     await show_profile(message, user_id, edit_mode=True)
 
-
+# --------------------- УДАЛЕНИЕ АНКЕТЫ ---------------------
 @router.message(F.text == "Удалить анкету")
 async def cmd_delete_profile(message: Message, state: FSMContext):
     user_id = message.from_user.id
@@ -607,7 +587,6 @@ async def cmd_delete_profile(message: Message, state: FSMContext):
     if not profile:
         await message.answer("У вас ещё нет анкеты, нечего удалять.")
         return
-
     await state.clear()
     await message.answer(
         "Вы уверены, что хотите удалить свою анкету? Это действие необратимо.",
@@ -631,23 +610,19 @@ async def cancel_delete(callback: CallbackQuery, state: FSMContext):
 # --------------------- ПРОСМОТР АНКЕТ ДРУГИХ ПОЛЬЗОВАТЕЛЕЙ ---------------------
 @router.message(Command("browse"))
 @router.message(F.text == "Просмотр анкет")
-@router.message(Command("browse"))
-@router.message(F.text == "Просмотр анкет")
 async def cmd_browse(message: Message, state: FSMContext):
     user_id = message.from_user.id
     if not await get_profile(user_id):
-        await message.answer("Сначала создайте свою анкету.", reply_markup=get_main_keyboard())
+        await message.answer("Сначала создайте свою анкету.", reply_markup=get_main_keyboard(False))
         return
 
     await state.set_state(BrowseProfiles.browsing)
-    # Инициализируем пустые списки (заполнятся при первом вызове get_next_profile)
     await state.update_data(new_pool=[], disliked_pool=[], current_pool='new')
     await message.answer(
         "Начинаем просмотр анкет. Для возврата в меню нажмите кнопку ниже.",
         reply_markup=get_back_keyboard()
     )
     await show_next_profile(message, user_id, state)
-
 
 async def show_next_profile(target_message: Message, user_id: int, state: FSMContext):
     data = await state.get_data()
@@ -659,6 +634,10 @@ async def show_next_profile(target_message: Message, user_id: int, state: FSMCon
     await state.update_data(**updated_data)
 
     profile = await get_profile(next_id)
+    if not profile:
+        await show_next_profile(target_message, user_id, state)
+        return
+
     name = profile['name']
     age = profile['age']
     description = profile['description']
@@ -666,64 +645,39 @@ async def show_next_profile(target_message: Message, user_id: int, state: FSMCon
 
     text = f"👤 **Анкета:**\nИмя: {name}\nВозраст: {age}\nОписание: {description}"
 
-    if not photos:
-        await target_message.answer(
-            text,
-            parse_mode="Markdown",
-            reply_markup=get_like_dislike_superlike_keyboard(next_id)
-        )
-    elif len(photos) == 1:
-        try:
+    try:
+        if not photos:
+            await target_message.answer(
+                text,
+                parse_mode="Markdown",
+                reply_markup=get_like_dislike_superlike_keyboard(next_id)
+            )
+        elif len(photos) == 1:
             await target_message.answer_photo(
                 photo=photos[0],
                 caption=text,
                 parse_mode="Markdown",
                 reply_markup=get_like_dislike_superlike_keyboard(next_id)
             )
-        except TelegramBadRequest:
-            logging.warning(f"Недействительный file_id {photos[0]} в анкете {next_id}")
-            await target_message.answer(
-                text + "\n\n⚠️ Фото повреждено и не может быть показано.",
-                parse_mode="Markdown",
-                reply_markup=get_like_dislike_superlike_keyboard(next_id)
-            )
-            # Удаляем фото из профиля?
-            # Можем не удалять, просто показать без фото.
-    else:
-        # Пробуем отправить медиагруппой
-        media_group = []
-        for i, file_id in enumerate(photos):
-            if i == 0:
-                media_group.append(InputMediaPhoto(media=file_id, caption=text, parse_mode="Markdown"))
-            else:
-                media_group.append(InputMediaPhoto(media=file_id))
-        try:
+        else:
+            media_group = []
+            for i, file_id in enumerate(photos):
+                if i == 0:
+                    media_group.append(InputMediaPhoto(media=file_id, caption=text, parse_mode="Markdown"))
+                else:
+                    media_group.append(InputMediaPhoto(media=file_id))
             await target_message.answer_media_group(media=media_group)
             await target_message.answer(
                 "Оцените анкету:",
                 reply_markup=get_like_dislike_superlike_keyboard(next_id)
             )
-        except TelegramBadRequest:
-            logging.warning(f"Ошибка отправки медиагруппы для анкеты {next_id}, пробуем по одному")
-            await target_message.answer(text, parse_mode="Markdown")
-            valid_photos = []
-            for file_id in photos:
-                try:
-                    await target_message.answer_photo(photo=file_id)
-                    valid_photos.append(file_id)
-                except TelegramBadRequest:
-                    logging.warning(f"Недействительный file_id {file_id} в анкете {next_id}")
-            if valid_photos:
-                await target_message.answer(
-                    "Оцените анкету:",
-                    reply_markup=get_like_dislike_superlike_keyboard(next_id)
-                )
-            else:
-                await target_message.answer(
-                    "⚠️ Все фото повреждены. Анкета видна без фото.",
-                    reply_markup=get_like_dislike_superlike_keyboard(next_id)
-                )
-            # Можно не сохранять изменения в базе для чужой анкеты
+    except TelegramBadRequest as e:
+        logging.error(f"Ошибка отправки фото анкеты {next_id}: {e}")
+        await target_message.answer(
+            text + "\n\n⚠️ Фото временно недоступно.",
+            parse_mode="Markdown",
+            reply_markup=get_like_dislike_superlike_keyboard(next_id)
+        )
 
 # --------------------- ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ДЛЯ ОТПРАВКИ АНКЕТЫ ---------------------
 async def send_profile_to_user(bot: Bot, to_user_id: int, profile: dict, custom_text: str = None):
@@ -743,30 +697,18 @@ async def send_profile_to_user(bot: Bot, to_user_id: int, profile: dict, custom_
         if not photos:
             await bot.send_message(to_user_id, text, parse_mode="Markdown")
         elif len(photos) == 1:
-            try:
-                await bot.send_photo(to_user_id, photo=photos[0], caption=text, parse_mode="Markdown")
-            except TelegramBadRequest:
-                logging.warning(f"Недействительный file_id {photos[0]} для пользователя {profile.get('user_id', 'unknown')}")
-                await bot.send_message(to_user_id, text, parse_mode="Markdown")
-                await bot.send_message(to_user_id, "⚠️ Фото пользователя повреждено, но анкета видна без фото.")
+            await bot.send_photo(to_user_id, photo=photos[0], caption=text, parse_mode="Markdown")
         else:
-            # Пробуем отправить медиагруппой
             media_group = []
             for i, file_id in enumerate(photos):
                 if i == 0:
                     media_group.append(InputMediaPhoto(media=file_id, caption=text, parse_mode="Markdown"))
                 else:
                     media_group.append(InputMediaPhoto(media=file_id))
-            try:
-                await bot.send_media_group(to_user_id, media=media_group)
-            except TelegramBadRequest:
-                logging.warning(f"Ошибка отправки медиагруппы для пользователя {to_user_id}, пробуем по одному")
-                await bot.send_message(to_user_id, text, parse_mode="Markdown")
-                for file_id in photos:
-                    try:
-                        await bot.send_photo(to_user_id, photo=file_id)
-                    except TelegramBadRequest:
-                        logging.warning(f"Недействительный file_id {file_id} пропущен")
+            await bot.send_media_group(to_user_id, media=media_group)
+    except TelegramBadRequest as e:
+        logging.error(f"Ошибка отправки фото пользователю {to_user_id}: {e}")
+        await bot.send_message(to_user_id, text, parse_mode="Markdown")
     except TelegramForbiddenError:
         logging.warning(f"User {to_user_id} has blocked the bot. Cannot send profile.")
     except Exception as e:
@@ -881,6 +823,9 @@ async def send_like_notification(bot: Bot, liker_id: int, target_id: int):
                 "Этот пользователь лайкнул вашу анкету. Хотите ответить?",
                 reply_markup=get_reply_keyboard(liker_id)
             )
+    except TelegramBadRequest as e:
+        logging.error(f"Ошибка отправки фото в like-уведомлении: {e}")
+        await bot.send_message(target_id, text, parse_mode="Markdown", reply_markup=get_reply_keyboard(liker_id))
     except TelegramForbiddenError:
         logging.warning(f"User {target_id} has blocked the bot. Cannot send like notification.")
     except Exception as e:
@@ -927,6 +872,9 @@ async def send_superlike_notification(bot: Bot, liker_id: int, target_id: int, c
                 "Этот пользователь отправил вам суперлайк. Хотите ответить?",
                 reply_markup=get_reply_keyboard(liker_id)
             )
+    except TelegramBadRequest as e:
+        logging.error(f"Ошибка отправки фото в superlike-уведомлении: {e}")
+        await bot.send_message(target_id, text, parse_mode="Markdown", reply_markup=get_reply_keyboard(liker_id))
     except TelegramForbiddenError:
         logging.warning(f"User {target_id} has blocked the bot. Cannot send superlike notification.")
     except Exception as e:
@@ -938,11 +886,9 @@ async def notify_mutual_like(bot: Bot, user_id: int, target_id: int):
     if not user_profile or not target_profile:
         return
 
-    # Отправляем анкеты
     await send_profile_to_user(bot, user_id, target_profile)
     await send_profile_to_user(bot, target_id, user_profile)
 
-    # Отправляем контакты
     try:
         target_chat = await bot.get_chat(target_id)
         target_username = target_chat.username
@@ -979,7 +925,7 @@ async def notify_mutual_like(bot: Bot, user_id: int, target_id: int):
 
     # Если институты совпадают, предлагаем встречу
     if user_profile.get('institute') == target_profile.get('institute'):
-        await create_meet_after_like(bot, user_id, target_id, user_id)  # инициатор - текущий user_id
+        await create_meet_after_like(bot, user_id, target_id, user_id)
 
 @router.callback_query(F.data.startswith("rate_"))
 async def process_rating(callback: CallbackQuery):
@@ -992,10 +938,7 @@ async def process_rating(callback: CallbackQuery):
         await callback.answer("Нельзя оценить себя!", show_alert=True)
         return
 
-    # Получаем вес оценщика
     voter_weight = await get_voter_weight(voter_id)
-
-    # Сохраняем оценку
     await add_rating(voter_id, target_id, value, voter_weight)
 
     await callback.message.edit_reply_markup(reply_markup=None)
@@ -1031,8 +974,10 @@ async def handle_reply_callback(callback: CallbackQuery, bot: Bot):
 @router.message(BrowseProfiles.browsing, F.text == "Назад в меню")
 async def back_to_menu(message: Message, state: FSMContext):
     await state.clear()
-    is_admin = (message.from_user.id in config.ADMIN_IDS)
-    keyboard = get_admin_keyboard() if is_admin else get_main_keyboard()
+    user_id = message.from_user.id
+    is_admin = (user_id in config.ADMIN_IDS)
+    has_profile = await get_profile(user_id) is not None
+    keyboard = get_admin_keyboard(has_profile) if is_admin else get_main_keyboard(has_profile)
     await message.answer("Главное меню", reply_markup=keyboard)
 
 @router.message(F.text == "Мой рейтинг")
@@ -1042,30 +987,11 @@ async def cmd_my_rating(message: Message):
     if rating == 1.0:
         await message.answer("⭐ Ваш текущий рейтинг: **1 ⭐ (начальный)**", parse_mode="Markdown")
     else:
-        # Если целое число, показываем без дробной части
         if rating.is_integer():
             rating_display = f"{int(rating)} ⭐"
         else:
             rating_display = f"{rating:.2f} ⭐"
         await message.answer(f"⭐ Ваш текущий рейтинг: **{rating_display}**", parse_mode="Markdown")
-
-@router.message(F.text == "Топ встреч")
-async def cmd_top_meets(message: Message):
-    user_id = message.from_user.id
-    top_users = await get_top_users(limit=10)  # получаем топ-10 за текущий месяц
-
-    if not top_users:
-        await message.answer("Пока никто не участвовал во встречах в этом месяце.")
-        return
-
-    lines = []
-    for idx, (uid, points) in enumerate(top_users, 1):
-        profile = await get_profile(uid)
-        name = profile['name'] if profile else f"Пользователь {uid}"
-        lines.append(f"{idx}. {name} — {points} очков")
-
-    text = "🏆 **Топ встреч за текущий месяц:**\n\n" + "\n".join(lines)
-    await message.answer(text, parse_mode="Markdown")
 
 # --------------------- ОБРАБОТКА НЕКОРРЕКТНЫХ СООБЩЕНИЙ ---------------------
 @router.message(CreateProfile.waiting_for_name)

@@ -6,13 +6,20 @@ from aiogram.types import (
 from data import INSTITUTES
 
 # ------------- Reply-клавиатуры -------------
-def get_main_keyboard():
-    buttons = [
-        [KeyboardButton(text="Создать анкету")],
-        [KeyboardButton(text="Моя анкета"), KeyboardButton(text="Редактировать анкету")],
-        [KeyboardButton(text="Просмотр анкет"), KeyboardButton(text="Мой рейтинг")],
-        [KeyboardButton(text="Топ встреч"), KeyboardButton(text="Удалить анкету")]
-    ]
+def get_main_keyboard(has_profile: bool = False):
+    if has_profile:
+        buttons = [
+            [KeyboardButton(text="Моя анкета"), KeyboardButton(text="Редактировать анкету")],
+            [KeyboardButton(text="Просмотр анкет"), KeyboardButton(text="Мой рейтинг")],
+            [KeyboardButton(text="Топ встреч"), KeyboardButton(text="Удалить анкету")]
+        ]
+    else:
+        buttons = [
+            [KeyboardButton(text="Создать анкету")],
+            [KeyboardButton(text="Моя анкета"), KeyboardButton(text="Редактировать анкету")],
+            [KeyboardButton(text="Просмотр анкет"), KeyboardButton(text="Мой рейтинг")],
+            [KeyboardButton(text="Топ встреч"), KeyboardButton(text="Удалить анкету")]
+        ]
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
 def get_admin_keyboard():
