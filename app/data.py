@@ -11,7 +11,7 @@ INSTITUTES = ["ИИТ", "ИИИ", "ИТУ", "ИКБ", "ИТХТ", "ИПТИП"]
 
 async def init_db():
     async with aiosqlite.connect(DB_PATH) as db:
-        # Таблица профилей с колонками рейтинга
+        # Таблица профилей (создаётся без новых колонок, они будут добавлены позже)
         await db.execute('''
             CREATE TABLE IF NOT EXISTS profiles (
                 user_id INTEGER PRIMARY KEY,
@@ -19,11 +19,8 @@ async def init_db():
                 age INTEGER NOT NULL,
                 gender TEXT NOT NULL,
                 interests TEXT NOT NULL,
-                institute TEXT DEFAULT "ИИТ",
                 description TEXT NOT NULL,
-                photos TEXT NOT NULL,
-                rating_sum REAL DEFAULT 0,
-                rating_weight REAL DEFAULT 0
+                photos TEXT NOT NULL
             )
         ''')
         # Таблица лайков
@@ -67,7 +64,7 @@ async def init_db():
                 PRIMARY KEY (user_id, year_month)
             )
         ''')
-        # Таблица рейтингов (используется в rating_system)
+        # Таблица рейтингов
         await db.execute('''
             CREATE TABLE IF NOT EXISTS ratings (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -79,6 +76,24 @@ async def init_db():
                 UNIQUE(from_user_id, to_user_id)
             )
         ''')
+
+        # Проверка и добавление новых колонок в таблицу profiles
+        cursor = await db.execute("PRAGMA table_info(profiles)")
+        columns = await cursor.fetchall()
+        column_names = [col[1] for col in columns]
+
+        if 'institute' not in column_names:
+            await db.execute("ALTER TABLE profiles ADD COLUMN institute TEXT DEFAULT 'ИИТ'")
+            print("Добавлена колонка institute в profiles")
+
+        if 'rating_sum' not in column_names:
+            await db.execute("ALTER TABLE profiles ADD COLUMN rating_sum REAL DEFAULT 0")
+            print("Добавлена колонка rating_sum в profiles")
+
+        if 'rating_weight' not in column_names:
+            await db.execute("ALTER TABLE profiles ADD COLUMN rating_weight REAL DEFAULT 0")
+            print("Добавлена колонка rating_weight в profiles")
+
         await db.commit()
 
 # ---------- Профили ----------
