@@ -20,7 +20,7 @@ from data import (
     save_profile, get_profile, get_all_profiles,
     add_like, add_dislike, get_ratings,
     get_user_stats, get_all_usernames,
-    DB_PATH, delete_profile, get_user_rating
+    DB_PATH, delete_profile
 )
 
 router = Router()
