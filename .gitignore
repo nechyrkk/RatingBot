@@ -1,0 +1,17 @@
+# Виртуальное окружение
+venv/
+env/
+__pycache__/
+*.pyc
+
+# База данных
+*.db
+*.sqlite3
+
+# Файлы с секретами
+.env
+config.local.py
+
+# VS Code
+.vscode/
+.idea/
