@@ -7,6 +7,8 @@ from aiogram.types import Message, CallbackQuery, InputMediaPhoto
 from aiogram.exceptions import TelegramForbiddenError
 import aiosqlite
 import config
+from rating_system import get_user_rating, add_rating, get_voter_weight
+from keyboards import get_rating_keyboard
 from states import CreateProfile, EditProfile, BrowseProfiles, SuperLike
 from keyboards import (
     get_main_keyboard, get_edit_keyboard, get_done_keyboard,
@@ -18,7 +20,7 @@ from data import (
     save_profile, get_profile, get_all_profiles,
     add_like, add_dislike, get_ratings,
     get_user_stats, get_all_usernames,
-    DB_PATH, delete_profile
+    DB_PATH, delete_profile, get_user_rating
 )
 
 router = Router()
@@ -60,28 +62,34 @@ async def cmd_stats(message: Message, bot: Bot):
         await message.answer("У вас нет прав на просмотр статистики.")
         return
 
+    # Получаем общую статистику
     stats = await get_user_stats()
     total = stats['total']
     gender_stats = stats['gender']
     male = gender_stats.get('Парень', 0)
     female = gender_stats.get('Девушка', 0)
 
-    # Получаем все username
+    # Получаем словарь {user_id: отображаемое имя}
     all_usernames = await get_all_usernames(bot)
 
-    # Разделяем по полу
     male_users = []
     female_users = []
+
+    # Для каждого пользователя получаем его пол и рейтинг
     async with aiosqlite.connect(DB_PATH) as db:
-        for uid in all_usernames.keys():
+        for uid, display in all_usernames.items():
             async with db.execute('SELECT gender FROM profiles WHERE user_id = ?', (uid,)) as cursor:
                 row = await cursor.fetchone()
                 if row:
                     gender = row[0]
+                    rating = await get_user_rating(uid)  # получаем рейтинг
+                    # Форматируем рейтинг: если целое число, то без дробной части
+                    rating_str = f"{rating:.2f}" if rating % 1 != 0 else f"{int(rating)}"
+                    line = f"{rating_str} {display}"
                     if gender == "Парень":
-                        male_users.append(all_usernames[uid])
+                        male_users.append(line)
                     else:
-                        female_users.append(all_usernames[uid])
+                        female_users.append(line)
 
     # Формируем текст
     text = f"📊 **Статистика пользователей:**\n\n" \
@@ -94,13 +102,19 @@ async def cmd_stats(message: Message, bot: Bot):
     if female_users:
         text += "👩 **Девушки:**\n" + "\n".join(female_users)
 
-    # Отправляем, разбивая если слишком длинный текст
+    # Отправляем с обработкой длинных сообщений и ошибок Markdown
     if len(text) > 4096:
         parts = [text[i:i + 4096] for i in range(0, len(text), 4096)]
         for part in parts:
-            await message.answer(part)
+            try:
+                await message.answer(part, parse_mode="Markdown")
+            except Exception:
+                await message.answer(part, parse_mode=None)
     else:
-        await message.answer(text)
+        try:
+            await message.answer(text, parse_mode="Markdown")
+        except Exception:
+            await message.answer(text, parse_mode=None)
 
 # --------------------- ОТМЕНА ---------------------
 @router.message(Command("cancel"))
@@ -797,42 +811,69 @@ async def send_superlike_notification(bot: Bot, liker_id: int, target_id: int, c
         logging.error(f"Failed to send superlike notification to {target_id}: {e}")
 
 async def notify_mutual_like(bot: Bot, user_id: int, target_id: int):
-    """Уведомляет обоих пользователей о взаимном лайке (только текст, без дублирования анкет)"""
     user_profile = await get_profile(user_id)
     target_profile = await get_profile(target_id)
     if not user_profile or not target_profile:
         return
 
-    # Получаем контактную информацию
+    # Отправляем анкеты (уже есть)
+    await send_profile_to_user(bot, user_id, target_profile)
+    await send_profile_to_user(bot, target_id, user_profile)
+
+    # Отправляем контакты (уже есть)
     try:
         target_chat = await bot.get_chat(target_id)
         target_username = target_chat.username
-        target_contact = f"@{target_username}" if target_username else f"{target_profile['name']} (нет username)"
+        contact_info = f"@{target_username}" if target_username else f"{target_profile['name']} (нет username)"
+        await bot.send_message(
+            user_id,
+            f"💕 Взаимная симпатия! Вы можете написать пользователю {target_profile['name']}: {contact_info}"
+        )
     except Exception as e:
-        logging.error(f"Failed to get target chat {target_id}: {e}")
-        target_contact = f"{target_profile['name']} (контакт недоступен)"
+        logging.error(f"Failed to send mutual like contact to user {user_id}: {e}")
 
     try:
         user_chat = await bot.get_chat(user_id)
         user_username = user_chat.username
-        user_contact = f"@{user_username}" if user_username else f"{user_profile['name']} (нет username)"
+        contact_info = f"@{user_username}" if user_username else f"{user_profile['name']} (нет username)"
+        await bot.send_message(
+            target_id,
+            f"💕 Взаимная симпатия! Вы можете написать пользователю {user_profile['name']}: {contact_info}"
+        )
     except Exception as e:
-        logging.error(f"Failed to get user chat {user_id}: {e}")
-        user_contact = f"{user_profile['name']} (контакт недоступен)"
+        logging.error(f"Failed to send mutual like contact to target {target_id}: {e}")
 
-    # Отправляем короткое сообщение user-у
+    # НОВОЕ: предложение оценить друг друга
     await bot.send_message(
         user_id,
-        f"💕 Взаимная симпатия! Вы можете написать пользователю {target_profile['name']}: {target_contact}",
-        parse_mode="Markdown"
+        f"Оцените пользователя {target_profile['name']} (от 1 до 5):",
+        reply_markup=get_rating_keyboard(target_id)
     )
-
-    # Отправляем короткое сообщение target-у
     await bot.send_message(
         target_id,
-        f"💕 Взаимная симпатия! Вы можете написать пользователю {user_profile['name']}: {user_contact}",
-        parse_mode="Markdown"
+        f"Оцените пользователя {user_profile['name']} (от 1 до 5):",
+        reply_markup=get_rating_keyboard(user_id)
     )
+
+@router.callback_query(F.data.startswith("rate_"))
+async def process_rating(callback: CallbackQuery):
+    data_parts = callback.data.split("_")
+    value = int(data_parts[1])
+    target_id = int(data_parts[2])
+    voter_id = callback.from_user.id
+
+    if voter_id == target_id:
+        await callback.answer("Нельзя оценить себя!", show_alert=True)
+        return
+
+    # Получаем вес оценщика
+    voter_weight = await get_voter_weight(voter_id)
+
+    # Сохраняем оценку
+    await add_rating(voter_id, target_id, value, voter_weight)
+
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await callback.answer("Спасибо за оценку!")
 
 # --------------------- ОБРАБОТКА ОТВЕТОВ НА ЛАЙКИ ---------------------
 @router.callback_query(F.data.startswith(("reply_like_", "reply_dislike_")))
@@ -867,6 +908,20 @@ async def back_to_menu(message: Message, state: FSMContext):
     is_admin = (message.from_user.id == config.ADMIN_IDS)
     keyboard = get_admin_keyboard() if is_admin else get_main_keyboard()
     await message.answer("Главное меню", reply_markup=keyboard)
+
+@router.message(F.text == "Мой рейтинг")
+async def cmd_my_rating(message: Message):
+    user_id = message.from_user.id
+    rating = await get_user_rating(user_id)
+    if rating == 1.0:
+        await message.answer("⭐ Ваш текущий рейтинг: **1 ⭐ (начальный)**", parse_mode="Markdown")
+    else:
+        # Если целое число, показываем без дробной части
+        if rating.is_integer():
+            rating_display = f"{int(rating)} ⭐"
+        else:
+            rating_display = f"{rating:.2f} ⭐"
+        await message.answer(f"⭐ Ваш текущий рейтинг: **{rating_display}**", parse_mode="Markdown")
 
 # --------------------- ОБРАБОТКА НЕКОРРЕКТНЫХ СООБЩЕНИЙ ---------------------
 @router.message(CreateProfile.waiting_for_name)

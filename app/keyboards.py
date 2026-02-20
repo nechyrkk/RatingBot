@@ -1,3 +1,4 @@
+# keyboards.py
 from aiogram.types import (
     ReplyKeyboardMarkup, KeyboardButton,
     InlineKeyboardMarkup, InlineKeyboardButton,
@@ -8,7 +9,7 @@ def get_main_keyboard():
     buttons = [
         [KeyboardButton(text="Создать анкету")],
         [KeyboardButton(text="Моя анкета"), KeyboardButton(text="Редактировать анкету")],
-        [KeyboardButton(text="Просмотр анкет")],
+        [KeyboardButton(text="Просмотр анкет"), KeyboardButton(text="Мой рейтинг")],
         [KeyboardButton(text="Удалить анкету")]
     ]
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
@@ -17,7 +18,7 @@ def get_admin_keyboard():
     buttons = [
         [KeyboardButton(text="Создать анкету")],
         [KeyboardButton(text="Моя анкета"), KeyboardButton(text="Редактировать анкету")],
-        [KeyboardButton(text="Просмотр анкет"), KeyboardButton(text="Статистика")],
+        [KeyboardButton(text="Просмотр анкет"), KeyboardButton(text="Статистика"), KeyboardButton(text="Мой рейтинг")],
         [KeyboardButton(text="Удалить анкету")]
     ]
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
@@ -79,6 +80,20 @@ def get_delete_confirm_keyboard():
         [
             InlineKeyboardButton(text="✅ Да, удалить", callback_data="delete_confirm"),
             InlineKeyboardButton(text="❌ Нет, отмена", callback_data="delete_cancel")
+        ]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+# НОВАЯ КЛАВИАТУРА ДЛЯ ОЦЕНКИ ПОСЛЕ МЕТЧА
+def get_rating_keyboard(target_id: int):
+    """Инлайн-клавиатура с оценками 1-5 (звёздочки)"""
+    buttons = [
+        [
+            InlineKeyboardButton(text="1⭐", callback_data=f"rate_1_{target_id}"),
+            InlineKeyboardButton(text="2⭐", callback_data=f"rate_2_{target_id}"),
+            InlineKeyboardButton(text="3⭐", callback_data=f"rate_3_{target_id}"),
+            InlineKeyboardButton(text="4⭐", callback_data=f"rate_4_{target_id}"),
+            InlineKeyboardButton(text="5⭐", callback_data=f"rate_5_{target_id}"),
         ]
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
