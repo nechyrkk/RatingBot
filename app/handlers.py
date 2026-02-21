@@ -611,6 +611,7 @@ async def cancel_delete(callback: CallbackQuery, state: FSMContext):
 @router.message(Command("browse"))
 @router.message(F.text == "Просмотр анкет")
 async def cmd_browse(message: Message, state: FSMContext):
+    logging.info(f"cmd_browse вызвана, состояние: {await state.get_state()}")
     user_id = message.from_user.id
     if not await get_profile(user_id):
         await message.answer("Сначала создайте свою анкету.", reply_markup=get_main_keyboard(False))
@@ -637,6 +638,7 @@ async def cmd_browse(message: Message, state: FSMContext):
 
         # Показываем ту же анкету
         await show_profile_by_id(message, current_profile_id, state)
+        logging.info(f"cmd_browse вызвана, состояние: {await state.get_state()}")
         return
 
     # Начинаем новый просмотр
