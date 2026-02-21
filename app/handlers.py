@@ -617,25 +617,28 @@ async def cmd_browse(message: Message, state: FSMContext):
         return
 
     current_state = await state.get_state()
-    if current_state == BrowseProfiles.browsing:
-        # Уже в режиме просмотра – напоминаем, но не показываем анкету повторно
-        data = await state.get_data()
-        if data.get('current_profile_id'):
-            await message.answer("Вы уже просматриваете анкету. Оцените её или нажмите 'Назад в меню'.")
-        else:
-            # Аномалия: состояние есть, но нет текущей анкеты – перезапускаем просмотр
-            await state.set_state(BrowseProfiles.browsing)
-            await state.update_data(new_pool=[], disliked_pool=[], current_pool='new', current_profile_id=None, last_message_id=None)
-            await message.answer(
-                "Начинаем просмотр анкет. Для возврата в меню нажмите кнопку ниже.",
-                reply_markup=get_back_keyboard()
-            )
-            await show_next_profile(message, user_id, state)
+    data = await state.get_data()
+    current_profile_id = data.get('current_profile_id')
+
+    # Если уже в режиме просмотра и есть текущая анкета – просто напоминаем, не показываем повторно
+    if current_state == BrowseProfiles.browsing and current_profile_id:
+        await message.answer("Вы уже просматриваете анкету. Оцените её или нажмите 'Назад в меню'.")
         return
 
-    # Новый просмотр
+    # Если состояние есть, но current_profile_id отсутствует (аномалия) – перезапускаем просмотр
+    if current_state == BrowseProfiles.browsing and not current_profile_id:
+        # Очищаем состояние и начинаем заново
+        await state.clear()
+
+    # Начинаем новый просмотр
     await state.set_state(BrowseProfiles.browsing)
-    await state.update_data(new_pool=[], disliked_pool=[], current_pool='new', current_profile_id=None, last_message_id=None)
+    await state.update_data(
+        new_pool=[],
+        disliked_pool=[],
+        current_pool='new',
+        current_profile_id=None,
+        last_message_id=None
+    )
     await message.answer(
         "Начинаем просмотр анкет. Для возврата в меню нажмите кнопку ниже.",
         reply_markup=get_back_keyboard()
@@ -673,6 +676,7 @@ async def show_profile_by_id(target_message: Message, profile_id: int, state: FS
                 reply_markup=get_like_dislike_superlike_keyboard(profile_id)
             )
         else:
+            # Отправляем медиагруппу (несколько фото)
             media_group = []
             for i, file_id in enumerate(photos):
                 if i == 0:
@@ -680,6 +684,8 @@ async def show_profile_by_id(target_message: Message, profile_id: int, state: FS
                 else:
                     media_group.append(InputMediaPhoto(media=file_id))
             await target_message.answer_media_group(media=media_group)
+
+            # Отправляем отдельное сообщение с кнопками
             sent = await target_message.answer(
                 "Оцените анкету:",
                 reply_markup=get_like_dislike_superlike_keyboard(profile_id)
@@ -692,7 +698,7 @@ async def show_profile_by_id(target_message: Message, profile_id: int, state: FS
             reply_markup=get_like_dislike_superlike_keyboard(profile_id)
         )
 
-    # Сохраняем ID показанной анкеты и ID сообщения
+    # Сохраняем ID показанной анкеты и ID сообщения с кнопками
     await state.update_data(current_profile_id=profile_id, last_message_id=sent.message_id)
 
 
@@ -701,7 +707,8 @@ async def show_next_profile(target_message: Message, user_id: int, state: FSMCon
     next_id, updated_data = await get_next_profile(user_id, data)
     if next_id is None:
         await target_message.answer(
-            "Больше нет анкет, соответствующих вашим интересам. Попробуйте позже или измените настройки.")
+            "Больше нет анкет, соответствующих вашим интересам. Попробуйте позже или измените настройки."
+        )
         await state.clear()
         return
     await state.update_data(**updated_data)
