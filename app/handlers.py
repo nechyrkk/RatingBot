@@ -650,7 +650,7 @@ async def show_profile_by_id(target_message: Message, profile_id: int, state: FS
     """Показывает анкету с заданным ID, обновляет состояние."""
     profile = await get_profile(profile_id)
     if not profile:
-        # Если анкета вдруг исчезла, переходим к следующей
+        # Если анкета исчезла, переходим к следующей
         await show_next_profile(target_message, target_message.from_user.id, state)
         return
 
@@ -668,6 +668,7 @@ async def show_profile_by_id(target_message: Message, profile_id: int, state: FS
                 parse_mode="Markdown",
                 reply_markup=get_like_dislike_superlike_keyboard(profile_id)
             )
+            await state.update_data(last_message_id=sent.message_id)
         elif len(photos) == 1:
             sent = await target_message.answer_photo(
                 photo=photos[0],
@@ -675,20 +676,22 @@ async def show_profile_by_id(target_message: Message, profile_id: int, state: FS
                 parse_mode="Markdown",
                 reply_markup=get_like_dislike_superlike_keyboard(profile_id)
             )
+            await state.update_data(last_message_id=sent.message_id)
         else:
-            # Отправляем медиагруппу (несколько фото)
+            # Отправляем медиагруппу
             media_group = []
             for i, file_id in enumerate(photos):
                 if i == 0:
                     media_group.append(InputMediaPhoto(media=file_id, caption=text, parse_mode="Markdown"))
                 else:
                     media_group.append(InputMediaPhoto(media=file_id))
-            # Прикрепляем клавиатуру к последнему фото
-            media_group[-1].reply_markup = get_like_dislike_superlike_keyboard(profile_id)
-            # Отправляем группу и получаем список отправленных сообщений
-            sent_messages = await target_message.answer_media_group(media=media_group)
-            # Последнее сообщение в группе — это фото с кнопками, сохраняем его ID
-            sent = sent_messages[-1]
+            await target_message.answer_media_group(media=media_group)
+            # Отдельное сообщение с кнопками
+            sent = await target_message.answer(
+                "Оцените анкету:",
+                reply_markup=get_like_dislike_superlike_keyboard(profile_id)
+            )
+            await state.update_data(last_message_id=sent.message_id)
     except TelegramBadRequest as e:
         logging.error(f"Ошибка отправки фото анкеты {profile_id}: {e}")
         sent = await target_message.answer(
@@ -696,13 +699,22 @@ async def show_profile_by_id(target_message: Message, profile_id: int, state: FS
             parse_mode="Markdown",
             reply_markup=get_like_dislike_superlike_keyboard(profile_id)
         )
+        await state.update_data(last_message_id=sent.message_id)
 
-    # Сохраняем ID показанной анкеты и ID сообщения с кнопками
-    await state.update_data(current_profile_id=profile_id, last_message_id=sent.message_id)
+    # Сохраняем ID текущей анкеты
+    await state.update_data(current_profile_id=profile_id)
 
 
 async def show_next_profile(target_message: Message, user_id: int, state: FSMContext):
     data = await state.get_data()
+    # Удаляем предыдущее сообщение с кнопками, если оно есть
+    last_msg_id = data.get('last_message_id')
+    if last_msg_id:
+        try:
+            await target_message.bot.delete_message(chat_id=target_message.chat.id, message_id=last_msg_id)
+        except Exception as e:
+            logging.warning(f"Не удалось удалить предыдущее сообщение: {e}")
+
     next_id, updated_data = await get_next_profile(user_id, data)
     if next_id is None:
         await target_message.answer(
