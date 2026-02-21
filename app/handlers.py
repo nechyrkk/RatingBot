@@ -616,13 +616,91 @@ async def cmd_browse(message: Message, state: FSMContext):
         await message.answer("Сначала создайте свою анкету.", reply_markup=get_main_keyboard(False))
         return
 
+    # Проверяем, есть ли уже активный просмотр
+    current_state = await state.get_state()
+    data = await state.get_data()
+    current_profile_id = data.get('current_profile_id')
+
+    if current_state == BrowseProfiles.browsing and current_profile_id:
+        # Уже есть показанная анкета – показываем её снова
+        # Попытаемся удалить клавиатуру у предыдущего сообщения, если знаем его ID
+        last_msg_id = data.get('last_message_id')
+        if last_msg_id:
+            try:
+                await message.bot.edit_message_reply_markup(
+                    chat_id=user_id,
+                    message_id=last_msg_id,
+                    reply_markup=None
+                )
+            except Exception as e:
+                logging.warning(f"Не удалось убрать клавиатуру у предыдущего сообщения: {e}")
+
+        # Показываем ту же анкету
+        await show_profile_by_id(message, current_profile_id, state)
+        return
+
+    # Начинаем новый просмотр
     await state.set_state(BrowseProfiles.browsing)
-    await state.update_data(new_pool=[], disliked_pool=[], current_pool='new')
+    await state.update_data(new_pool=[], disliked_pool=[], current_pool='new', current_profile_id=None, last_message_id=None)
     await message.answer(
         "Начинаем просмотр анкет. Для возврата в меню нажмите кнопку ниже.",
         reply_markup=get_back_keyboard()
     )
     await show_next_profile(message, user_id, state)
+
+
+async def show_profile_by_id(target_message: Message, profile_id: int, state: FSMContext):
+    """Показывает анкету с заданным ID, обновляет состояние."""
+    profile = await get_profile(profile_id)
+    if not profile:
+        # Если анкета вдруг исчезла, переходим к следующей
+        await show_next_profile(target_message, target_message.from_user.id, state)
+        return
+
+    name = profile['name']
+    age = profile['age']
+    description = profile['description']
+    photos = profile.get('photos', [])
+
+    text = f"👤 **Анкета:**\nИмя: {name}\nВозраст: {age}\nОписание: {description}"
+
+    try:
+        if not photos:
+            sent = await target_message.answer(
+                text,
+                parse_mode="Markdown",
+                reply_markup=get_like_dislike_superlike_keyboard(profile_id)
+            )
+        elif len(photos) == 1:
+            sent = await target_message.answer_photo(
+                photo=photos[0],
+                caption=text,
+                parse_mode="Markdown",
+                reply_markup=get_like_dislike_superlike_keyboard(profile_id)
+            )
+        else:
+            media_group = []
+            for i, file_id in enumerate(photos):
+                if i == 0:
+                    media_group.append(InputMediaPhoto(media=file_id, caption=text, parse_mode="Markdown"))
+                else:
+                    media_group.append(InputMediaPhoto(media=file_id))
+            await target_message.answer_media_group(media=media_group)
+            sent = await target_message.answer(
+                "Оцените анкету:",
+                reply_markup=get_like_dislike_superlike_keyboard(profile_id)
+            )
+    except TelegramBadRequest as e:
+        logging.error(f"Ошибка отправки фото анкеты {profile_id}: {e}")
+        sent = await target_message.answer(
+            text + "\n\n⚠️ Фото временно недоступно.",
+            parse_mode="Markdown",
+            reply_markup=get_like_dislike_superlike_keyboard(profile_id)
+        )
+
+    # Сохраняем ID показанной анкеты и ID сообщения
+    await state.update_data(current_profile_id=profile_id, last_message_id=sent.message_id)
+
 
 async def show_next_profile(target_message: Message, user_id: int, state: FSMContext):
     data = await state.get_data()
@@ -630,8 +708,10 @@ async def show_next_profile(target_message: Message, user_id: int, state: FSMCon
     if next_id is None:
         await target_message.answer(
             "Больше нет анкет, соответствующих вашим интересам. Попробуйте позже или измените настройки.")
+        await state.clear()
         return
     await state.update_data(**updated_data)
+    await show_profile_by_id(target_message, next_id, state)
 
     profile = await get_profile(next_id)
     if not profile:
@@ -734,19 +814,28 @@ async def handle_reaction(callback: CallbackQuery, state: FSMContext, bot: Bot):
             else:
                 await send_like_notification(bot, user_id, target_id)
         await callback.answer("Лайк сохранён")
+        await state.update_data(current_profile_id=None, last_message_id=None)
         await show_next_profile(callback.message, user_id, state)
 
     elif action == "dislike":
         await add_dislike(user_id, target_id)
         await callback.answer("Дизлайк сохранён")
+        await state.update_data(current_profile_id=None, last_message_id=None)
         await show_next_profile(callback.message, user_id, state)
 
     elif action == "superlike":
+        await callback.message.edit_reply_markup(reply_markup=None)
         await state.update_data(superlike_target=target_id)
+        await state.update_data(current_profile_id=None, last_message_id=None)
+
         await state.set_state(SuperLike.waiting_for_message)
+
         await callback.message.answer(
             "Вы выбрали суперлайк! Напишите сообщение, которое получит этот пользователь вместе с вашей анкетой:"
         )
+
+        # Подтверждаем нажатие кнопки
+        await callback.answer()
 
 @router.message(SuperLike.waiting_for_message)
 async def process_superlike_message(message: Message, state: FSMContext, bot: Bot):
