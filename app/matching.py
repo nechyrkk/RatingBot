@@ -41,7 +41,7 @@ async def get_profile_pools(user_id: int):
 
     return new_ids, disliked_ids
 
-async def get_next_profile(user_id: int, state_data: dict) -> tuple:
+async def get_next_profile(user_id: int, state_data: dict) -> (int, dict):
     """
     Возвращает (next_profile_id, updated_state_data) или (None, state_data), если нет анкет.
     state_data должен содержать ключи:
@@ -57,41 +57,32 @@ async def get_next_profile(user_id: int, state_data: dict) -> tuple:
         state_data['disliked_pool'] = disliked_ids
         state_data['current_pool'] = 'new'  # начинаем с новых
 
-    # Если в текущем пуле есть элементы
+    # Показываем из new_pool, пока он не пуст
     if state_data['current_pool'] == 'new' and state_data['new_pool']:
-        # Берём случайный из новых
         next_id = random.choice(state_data['new_pool'])
         state_data['new_pool'].remove(next_id)
         return next_id, state_data
 
-    # Если новые кончились, переключаемся на дизлайкнутые
+    # Если new_pool пуст, переключаемся на disliked_pool
     if state_data['current_pool'] == 'new' and not state_data['new_pool']:
         state_data['current_pool'] = 'disliked'
 
-    # Работа с дизлайкнутыми
+    # Показываем из disliked_pool
     if state_data['current_pool'] == 'disliked':
         if state_data['disliked_pool']:
             next_id = random.choice(state_data['disliked_pool'])
             state_data['disliked_pool'].remove(next_id)
+            # Перемещаем показанную дизлайкнутую анкету в new_pool
+            state_data['new_pool'].append(next_id)
             return next_id, state_data
         else:
-            # Дизлайкнутые закончились – перезагружаем оба пула и начинаем заново с new
-            new_ids, disliked_ids = await get_profile_pools(user_id)
-            state_data['new_pool'] = new_ids
-            state_data['disliked_pool'] = disliked_ids
-            state_data['current_pool'] = 'new'
-            # Пробуем взять из нового пула после перезагрузки
+            # Дизлайкнутые закончились, но есть анкеты в new_pool (перемещённые из дизлайкнутых)
             if state_data['new_pool']:
+                state_data['current_pool'] = 'new'
                 next_id = random.choice(state_data['new_pool'])
                 state_data['new_pool'].remove(next_id)
                 return next_id, state_data
-            elif state_data['disliked_pool']:
-                next_id = random.choice(state_data['disliked_pool'])
-                state_data['disliked_pool'].remove(next_id)
-                return next_id, state_data
             else:
-                # Совсем никого нет
                 return None, state_data
 
-    # Если дошли сюда, значит что-то пошло не так, но вернём None
     return None, state_data
