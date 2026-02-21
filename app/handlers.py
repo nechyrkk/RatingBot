@@ -683,13 +683,12 @@ async def show_profile_by_id(target_message: Message, profile_id: int, state: FS
                     media_group.append(InputMediaPhoto(media=file_id, caption=text, parse_mode="Markdown"))
                 else:
                     media_group.append(InputMediaPhoto(media=file_id))
-            await target_message.answer_media_group(media=media_group)
-
-            # Отправляем отдельное сообщение с кнопками
-            sent = await target_message.answer(
-                "Оцените анкету:",
-                reply_markup=get_like_dislike_superlike_keyboard(profile_id)
-            )
+            # Прикрепляем клавиатуру к последнему фото
+            media_group[-1].reply_markup = get_like_dislike_superlike_keyboard(profile_id)
+            # Отправляем группу и получаем список отправленных сообщений
+            sent_messages = await target_message.answer_media_group(media=media_group)
+            # Последнее сообщение в группе — это фото с кнопками, сохраняем его ID
+            sent = sent_messages[-1]
     except TelegramBadRequest as e:
         logging.error(f"Ошибка отправки фото анкеты {profile_id}: {e}")
         sent = await target_message.answer(
@@ -713,52 +712,6 @@ async def show_next_profile(target_message: Message, user_id: int, state: FSMCon
         return
     await state.update_data(**updated_data)
     await show_profile_by_id(target_message, next_id, state)
-
-    profile = await get_profile(next_id)
-    if not profile:
-        await show_next_profile(target_message, user_id, state)
-        return
-
-    name = profile['name']
-    age = profile['age']
-    description = profile['description']
-    photos = profile.get('photos', [])
-
-    text = f"👤 **Анкета:**\nИмя: {name}\nВозраст: {age}\nОписание: {description}"
-
-    try:
-        if not photos:
-            await target_message.answer(
-                text,
-                parse_mode="Markdown",
-                reply_markup=get_like_dislike_superlike_keyboard(next_id)
-            )
-        elif len(photos) == 1:
-            await target_message.answer_photo(
-                photo=photos[0],
-                caption=text,
-                parse_mode="Markdown",
-                reply_markup=get_like_dislike_superlike_keyboard(next_id)
-            )
-        else:
-            media_group = []
-            for i, file_id in enumerate(photos):
-                if i == 0:
-                    media_group.append(InputMediaPhoto(media=file_id, caption=text, parse_mode="Markdown"))
-                else:
-                    media_group.append(InputMediaPhoto(media=file_id))
-            await target_message.answer_media_group(media=media_group)
-            await target_message.answer(
-                "Оцените анкету:",
-                reply_markup=get_like_dislike_superlike_keyboard(next_id)
-            )
-    except TelegramBadRequest as e:
-        logging.error(f"Ошибка отправки фото анкеты {next_id}: {e}")
-        await target_message.answer(
-            text + "\n\n⚠️ Фото временно недоступно.",
-            parse_mode="Markdown",
-            reply_markup=get_like_dislike_superlike_keyboard(next_id)
-        )
 
 # --------------------- ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ДЛЯ ОТПРАВКИ АНКЕТЫ ---------------------
 async def send_profile_to_user(bot: Bot, to_user_id: int, profile: dict, custom_text: str = None):
