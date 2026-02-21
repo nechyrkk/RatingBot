@@ -823,20 +823,39 @@ async def handle_reaction(callback: CallbackQuery, state: FSMContext, bot: Bot):
         await state.update_data(current_profile_id=None, last_message_id=None)
         await show_next_profile(callback.message, user_id, state)
 
+
     elif action == "superlike":
+
+        # Убираем клавиатуру у текущего сообщения
+
         await callback.message.edit_reply_markup(reply_markup=None)
+
+        # Сохраняем ID цели для следующего шага
+
         await state.update_data(superlike_target=target_id)
+
+        # Сбрасываем информацию о текущей анкете, чтобы она считалась обработанной
+
         await state.update_data(current_profile_id=None, last_message_id=None)
+
+        # Переводим пользователя в состояние ожидания сообщения для суперлайка
 
         await state.set_state(SuperLike.waiting_for_message)
 
+        # Отправляем запрос на ввод сообщения
+
         await callback.message.answer(
+
             "Вы выбрали суперлайк! Напишите сообщение, которое получит этот пользователь вместе с вашей анкетой:"
+
         )
+
+        await callback.answer()
 
         # Подтверждаем нажатие кнопки
         await callback.answer()
 
+@router.message(SuperLike.waiting_for_message)
 @router.message(SuperLike.waiting_for_message)
 async def process_superlike_message(message: Message, state: FSMContext, bot: Bot):
     data = await state.get_data()
@@ -852,6 +871,7 @@ async def process_superlike_message(message: Message, state: FSMContext, bot: Bo
         await message.answer("Сообщение не может быть пустым. Отправьте текст или отмените командой /cancel")
         return
 
+    # Сохраняем лайк
     await add_like(user_id, target_id)
 
     target_profile = await get_profile(target_id)
@@ -866,8 +886,11 @@ async def process_superlike_message(message: Message, state: FSMContext, bot: Bo
     else:
         await message.answer("Суперлайк сохранён (пользователь не увидит из-за настроек интересов).")
 
-    await state.clear()
+    # Очищаем состояние суперлайка и возвращаемся в режим просмотра
+    await state.update_data(superlike_target=None)  # удаляем временные данные
     await state.set_state(BrowseProfiles.browsing)
+
+    # Показываем следующую анкету
     await show_next_profile(message, user_id, state)
 
 # --------------------- ФУНКЦИИ УВЕДОМЛЕНИЙ ---------------------
