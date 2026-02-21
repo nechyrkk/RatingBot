@@ -611,37 +611,29 @@ async def cancel_delete(callback: CallbackQuery, state: FSMContext):
 @router.message(Command("browse"))
 @router.message(F.text == "Просмотр анкет")
 async def cmd_browse(message: Message, state: FSMContext):
-    logging.info(f"cmd_browse вызвана, состояние: {await state.get_state()}")
     user_id = message.from_user.id
     if not await get_profile(user_id):
         await message.answer("Сначала создайте свою анкету.", reply_markup=get_main_keyboard(False))
         return
 
-    # Проверяем, есть ли уже активный просмотр
     current_state = await state.get_state()
-    data = await state.get_data()
-    current_profile_id = data.get('current_profile_id')
-
-    if current_state == BrowseProfiles.browsing and current_profile_id:
-        # Уже есть показанная анкета – показываем её снова
-        # Попытаемся удалить клавиатуру у предыдущего сообщения, если знаем его ID
-        last_msg_id = data.get('last_message_id')
-        if last_msg_id:
-            try:
-                await message.bot.edit_message_reply_markup(
-                    chat_id=user_id,
-                    message_id=last_msg_id,
-                    reply_markup=None
-                )
-            except Exception as e:
-                logging.warning(f"Не удалось убрать клавиатуру у предыдущего сообщения: {e}")
-
-        # Показываем ту же анкету
-        await show_profile_by_id(message, current_profile_id, state)
-        logging.info(f"cmd_browse вызвана, состояние: {await state.get_state()}")
+    if current_state == BrowseProfiles.browsing:
+        # Уже в режиме просмотра – напоминаем, но не показываем анкету повторно
+        data = await state.get_data()
+        if data.get('current_profile_id'):
+            await message.answer("Вы уже просматриваете анкету. Оцените её или нажмите 'Назад в меню'.")
+        else:
+            # Аномалия: состояние есть, но нет текущей анкеты – перезапускаем просмотр
+            await state.set_state(BrowseProfiles.browsing)
+            await state.update_data(new_pool=[], disliked_pool=[], current_pool='new', current_profile_id=None, last_message_id=None)
+            await message.answer(
+                "Начинаем просмотр анкет. Для возврата в меню нажмите кнопку ниже.",
+                reply_markup=get_back_keyboard()
+            )
+            await show_next_profile(message, user_id, state)
         return
 
-    # Начинаем новый просмотр
+    # Новый просмотр
     await state.set_state(BrowseProfiles.browsing)
     await state.update_data(new_pool=[], disliked_pool=[], current_pool='new', current_profile_id=None, last_message_id=None)
     await message.answer(
