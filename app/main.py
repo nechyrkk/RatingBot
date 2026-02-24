@@ -5,12 +5,17 @@ from aiogram.fsm.storage.memory import MemoryStorage
 
 from config import BOT_TOKEN
 from handlers import router
-from data import init_db
+from data import init_db, assign_uids_to_existing_users
 
 logging.basicConfig(level=logging.INFO)
 
 async def main():
     await init_db()  # создаст таблицы, если их нет
+    
+    # Присваиваем UID существующим пользователям (если их нет)
+    await assign_uids_to_existing_users()
+    print("UIDs assigned to existing users")
+    
     bot = Bot(token=BOT_TOKEN)
     dp = Dispatcher(storage=MemoryStorage())
     dp.include_router(router)
