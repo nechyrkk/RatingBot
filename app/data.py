@@ -9,20 +9,12 @@ DB_PATH = "bot_database.db"
 # Список институтов (фиксированный)
 INSTITUTES = ["ИИТ", "ИИИ", "ИТУ", "ИКБ", "ИТХТ", "ИПТИП"]
 
-# Эмодзи для разных диапазонов UID
-UID_EMOJIS = {
-    "1-100": "⭐",      # первые 100 пользователей
-    "101-1000": "🌟",    # следующие 900 пользователей
-    "1001+": "💫"        # остальные
-}
-
 async def init_db():
     async with aiosqlite.connect(DB_PATH) as db:
-        # Таблица профилей
+        # Таблица профилей (создаётся без новых колонок, они будут добавлены позже)
         await db.execute('''
             CREATE TABLE IF NOT EXISTS profiles (
                 user_id INTEGER PRIMARY KEY,
-                uid INTEGER UNIQUE,
                 name TEXT NOT NULL,
                 age INTEGER NOT NULL,
                 gender TEXT NOT NULL,
@@ -47,7 +39,7 @@ async def init_db():
                 PRIMARY KEY (user_id, disliked_user_id)
             )
         ''')
-        # Таблица заданий на встречу
+        # Таблица заданий на встречу (с новыми колонками)
         await db.execute('''
             CREATE TABLE IF NOT EXISTS meet_tasks (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -95,19 +87,12 @@ async def init_db():
         cursor = await db.execute("PRAGMA table_info(profiles)")
         columns = await cursor.fetchall()
         column_names = [col[1] for col in columns]
-        
-        if 'uid' not in column_names:
-            await db.execute("ALTER TABLE profiles ADD COLUMN uid INTEGER")
-            print("Добавлена колонка uid в profiles")
-        
         if 'institute' not in column_names:
             await db.execute("ALTER TABLE profiles ADD COLUMN institute TEXT DEFAULT 'ИИТ'")
             print("Добавлена колонка institute в profiles")
-        
         if 'rating_sum' not in column_names:
             await db.execute("ALTER TABLE profiles ADD COLUMN rating_sum REAL DEFAULT 0")
             print("Добавлена колонка rating_sum в profiles")
-        
         if 'rating_weight' not in column_names:
             await db.execute("ALTER TABLE profiles ADD COLUMN rating_weight REAL DEFAULT 0")
             print("Добавлена колонка rating_weight в profiles")
@@ -131,82 +116,33 @@ async def init_db():
 
         await db.commit()
 
-async def get_next_uid() -> int:
-    """Генерирует следующий доступный UID"""
-    async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute('SELECT MAX(uid) FROM profiles') as cursor:
-            row = await cursor.fetchone()
-            return (row[0] or 0) + 1
-
-async def assign_uids_to_existing_users():
-    """Присваивает UID всем существующим пользователям в порядке создания"""
-    async with aiosqlite.connect(DB_PATH) as db:
-        # Получаем всех пользователей без uid, отсортированных по rowid (порядок создания)
-        async with db.execute('''
-            SELECT user_id FROM profiles 
-            WHERE uid IS NULL 
-            ORDER BY rowid
-        ''') as cursor:
-            users = await cursor.fetchall()
-        
-        if not users:
-            return
-        
-        # Получаем максимальный текущий uid
-        async with db.execute('SELECT MAX(uid) FROM profiles') as cursor:
-            row = await cursor.fetchone()
-            current_max = row[0] or 0
-        
-        # Присваиваем uid по порядку
-        for i, (user_id,) in enumerate(users, start=1):
-            new_uid = current_max + i
-            await db.execute(
-                'UPDATE profiles SET uid = ? WHERE user_id = ?',
-                (new_uid, user_id)
-            )
-        
-        await db.commit()
-        print(f"Присвоены UID {len(users)} пользователям")
-
 # ---------- Профили ----------
-async def save_profile(user_id: int, name: str, age: int, gender: str, interests: str, 
-                      institute: str, description: str, photos: list, uid: int = None):
+async def save_profile(user_id: int, name: str, age: int, gender: str, interests: str, institute: str, description: str, photos: list):
     photos_json = json.dumps(photos)
     async with aiosqlite.connect(DB_PATH) as db:
-        # Получаем текущие значения рейтинга и uid, если профиль уже существует
-        async with db.execute('''
-            SELECT rating_sum, rating_weight, uid FROM profiles WHERE user_id = ?
-        ''', (user_id,)) as cursor:
+        # Получаем текущие значения рейтинга, если профиль уже существует
+        async with db.execute('SELECT rating_sum, rating_weight FROM profiles WHERE user_id = ?', (user_id,)) as cursor:
             row = await cursor.fetchone()
-        
         if row:
-            rating_sum, rating_weight, existing_uid = row
-            # Если uid не передан, используем существующий
-            final_uid = uid if uid is not None else existing_uid
+            rating_sum, rating_weight = row
         else:
             rating_sum, rating_weight = 0.0, 0.0
-            # Для нового профиля генерируем uid
-            final_uid = uid if uid is not None else await get_next_uid()
-        
+
         await db.execute('''
             INSERT OR REPLACE INTO profiles
-            (user_id, uid, name, age, gender, interests, institute, description, photos, rating_sum, rating_weight)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (user_id, final_uid, name, age, gender, interests, institute, description, photos_json, rating_sum, rating_weight))
+            (user_id, name, age, gender, interests, institute, description, photos, rating_sum, rating_weight)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (user_id, name, age, gender, interests, institute, description, photos_json, rating_sum, rating_weight))
         await db.commit()
 
 async def get_profile(user_id: int) -> Optional[Dict[str, Any]]:
     async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute('''
-            SELECT uid, name, age, gender, interests, institute, description, photos 
-            FROM profiles WHERE user_id = ?
-        ''', (user_id,)) as cursor:
+        async with db.execute('SELECT name, age, gender, interests, institute, description, photos FROM profiles WHERE user_id = ?', (user_id,)) as cursor:
             row = await cursor.fetchone()
             if row:
-                uid, name, age, gender, interests, institute, description, photos_json = row
+                name, age, gender, interests, institute, description, photos_json = row
                 photos = json.loads(photos_json)
                 return {
-                    'uid': uid,
                     'name': name,
                     'age': age,
                     'gender': gender,
@@ -219,17 +155,13 @@ async def get_profile(user_id: int) -> Optional[Dict[str, Any]]:
 
 async def get_all_profiles() -> Dict[int, Dict[str, Any]]:
     async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute('''
-            SELECT user_id, uid, name, age, gender, interests, institute, description, photos 
-            FROM profiles
-        ''') as cursor:
+        async with db.execute('SELECT user_id, name, age, gender, interests, institute, description, photos FROM profiles') as cursor:
             rows = await cursor.fetchall()
             profiles = {}
             for row in rows:
-                user_id, uid, name, age, gender, interests, institute, description, photos_json = row
+                user_id, name, age, gender, interests, institute, description, photos_json = row
                 photos = json.loads(photos_json)
                 profiles[user_id] = {
-                    'uid': uid,
                     'name': name,
                     'age': age,
                     'gender': gender,
@@ -244,15 +176,6 @@ async def update_profile_institute(user_id: int, institute: str):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute('UPDATE profiles SET institute = ? WHERE user_id = ?', (institute, user_id))
         await db.commit()
-
-def get_uid_emoji(uid: int) -> str:
-    """Возвращает эмодзи на основе UID"""
-    if uid <= 100:
-        return UID_EMOJIS["1-100"]
-    elif uid <= 1000:
-        return UID_EMOJIS["101-1000"]
-    else:
-        return UID_EMOJIS["1001+"]
 
 # ---------- Оценки (лайки/дизлайки) ----------
 async def add_like(user_id: int, target_id: int):
@@ -291,19 +214,18 @@ async def get_user_stats() -> Dict[str, Any]:
 
 async def get_all_usernames(bot: Bot) -> dict:
     async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute('SELECT user_id, uid, name FROM profiles') as cursor:
+        async with db.execute('SELECT user_id, name FROM profiles') as cursor:
             rows = await cursor.fetchall()
             result = {}
-            for user_id, uid, name in rows:
+            for user_id, name in rows:
                 try:
                     chat = await bot.get_chat(user_id)
-                    emoji = get_uid_emoji(uid) if uid else ""
                     if chat.username:
-                        display = f"{emoji} {name} (@{chat.username})"
+                        display = f"{name} (@{chat.username})"
                     else:
-                        display = f"{emoji} {name} (нет username)"
+                        display = f"{name} (нет username)"
                 except Exception:
-                    display = f"{emoji} {name} (чат недоступен)"
+                    display = f"{name} (чат недоступен)"
                 result[user_id] = display
             return result
 

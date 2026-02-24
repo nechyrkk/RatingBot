@@ -24,7 +24,6 @@ from data import (
     get_user_stats, get_all_usernames, get_top_users,
     DB_PATH, delete_profile, INSTITUTES
 )
-from data import get_uid_emoji
 
 router = Router()
 router.include_router(meet_router)
@@ -294,15 +293,8 @@ async def show_profile(message: Message, user_id: int, edit_mode: bool = False):
     age = profile['age']
     description = profile['description']
     photos = profile.get('photos', [])
-    uid = profile.get('uid')
-    
-    # Добавляем эмодзи перед именем если есть UID
-    display_name = name
-    if uid:
-        emoji = get_uid_emoji(uid)
-        display_name = f"{emoji} {name}"
 
-    text = f"📝 **Ваша анкета:**\nUID: {uid}\nИмя: {display_name}\nВозраст: {age}\nОписание: {description}"
+    text = f"📝 **Ваша анкета:**\nИмя: {name}\nВозраст: {age}\nОписание: {description}"
 
     try:
         if not photos:
@@ -666,15 +658,8 @@ async def show_profile_by_id(target_message: Message, profile_id: int, state: FS
     age = profile['age']
     description = profile['description']
     photos = profile.get('photos', [])
-    uid = profile.get('uid')
-    
-    # Добавляем эмодзи перед именем если есть UID
-    display_name = name
-    if uid:
-        emoji = get_uid_emoji(uid)
-        display_name = f"{emoji} {name}"
 
-    text = f"👤 **Анкета:**\nUID: {uid}\nИмя: {display_name}\nВозраст: {age}\nОписание: {description}"
+    text = f"👤 **Анкета:**\nИмя: {name}\nВозраст: {age}\nОписание: {description}"
 
     try:
         if not photos:
@@ -746,20 +731,13 @@ async def send_profile_to_user(bot: Bot, to_user_id: int, profile: dict, custom_
     age = profile['age']
     description = profile['description']
     photos = profile.get('photos', [])
-    uid = profile.get('uid')
-    
-    # Добавляем эмодзи перед именем если есть UID
-    display_name = name
-    if uid:
-        emoji = get_uid_emoji(uid)
-        display_name = f"{emoji} {name}"
 
     if custom_text:
         header = f"💌 {custom_text}\n\n"
     else:
         header = ""
 
-    text = f"{header}👤 **Анкета:**\nUID: {uid}\nИмя: {display_name}\nВозраст: {age}\nОписание: {description}"
+    text = f"{header}👤 **Анкета:**\nИмя: {name}\nВозраст: {age}\nОписание: {description}"
 
     try:
         if not photos:
@@ -781,7 +759,6 @@ async def send_profile_to_user(bot: Bot, to_user_id: int, profile: dict, custom_
         logging.warning(f"User {to_user_id} has blocked the bot. Cannot send profile.")
     except Exception as e:
         logging.error(f"Failed to send profile to user {to_user_id}: {e}")
-
 
 # --------------------- ОБРАБОТКА РЕАКЦИЙ ---------------------
 @router.callback_query(BrowseProfiles.browsing, F.data.startswith(("like_", "dislike_", "superlike_")))
@@ -892,15 +869,8 @@ async def send_like_notification(bot: Bot, liker_id: int, target_id: int):
     age = liker_profile['age']
     description = liker_profile['description']
     photos = liker_profile.get('photos', [])
-    uid = liker_profile.get('uid')
-    
-    # Добавляем эмодзи перед именем если есть UID
-    display_name = name
-    if uid:
-        emoji = get_uid_emoji(uid)
-        display_name = f"{emoji} {name}"
 
-    text = f"💌 Пользователь {display_name} лайкнул вашу анкету!\n\n👤 **Анкета:**\nUID: {uid}\nИмя: {display_name}\nВозраст: {age}\nОписание: {description}"
+    text = f"💌 Пользователь {name} лайкнул вашу анкету!\n\n👤 **Анкета:**\nИмя: {name}\nВозраст: {age}\nОписание: {description}"
 
     try:
         if not photos:
@@ -948,15 +918,8 @@ async def send_superlike_notification(bot: Bot, liker_id: int, target_id: int, c
     age = liker_profile['age']
     description = liker_profile['description']
     photos = liker_profile.get('photos', [])
-    uid = liker_profile.get('uid')
-    
-    # Добавляем эмодзи перед именем если есть UID
-    display_name = name
-    if uid:
-        emoji = get_uid_emoji(uid)
-        display_name = f"{emoji} {name}"
 
-    text = f"💌 Пользователь {display_name} отправил вам суперлайк!\n\n✉️ Сообщение: {custom_message}\n\n👤 **Анкета:**\nUID: {uid}\nИмя: {display_name}\nВозраст: {age}\nОписание: {description}"
+    text = f"💌 Пользователь {name} отправил вам суперлайк!\n\n✉️ Сообщение: {custom_message}\n\n👤 **Анкета:**\nИмя: {name}\nВозраст: {age}\nОписание: {description}"
 
     try:
         if not photos:
@@ -994,7 +957,7 @@ async def send_superlike_notification(bot: Bot, liker_id: int, target_id: int, c
         logging.warning(f"User {target_id} has blocked the bot. Cannot send superlike notification.")
     except Exception as e:
         logging.error(f"Failed to send superlike notification to {target_id}: {e}")
-        
+
 async def notify_mutual_like(bot: Bot, user_id: int, target_id: int):
     user_profile = await get_profile(user_id)
     target_profile = await get_profile(target_id)
