@@ -18,9 +18,16 @@ class EditProfile(StatesGroup):
     waiting_for_new_institute = State()
     waiting_for_new_description = State()
     waiting_for_new_photos = State()
+    waiting_for_new_video = State()
 
 class BrowseProfiles(StatesGroup):
     browsing = State()
 
 class SuperLike(StatesGroup):
     waiting_for_message = State()
+
+class Verification(StatesGroup):
+    waiting_for_card = State()
+
+class RouletteState(StatesGroup):
+    viewing = State()

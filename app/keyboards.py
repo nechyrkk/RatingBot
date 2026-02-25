@@ -13,6 +13,9 @@ def get_main_keyboard(has_profile: bool = False):
     buttons.append([KeyboardButton(text="Моя анкета"), KeyboardButton(text="Редактировать анкету")])
     buttons.append([KeyboardButton(text="Просмотр анкет"), KeyboardButton(text="Мой рейтинг")])
     buttons.append([KeyboardButton(text="Топ встреч"), KeyboardButton(text="Удалить анкету")])
+    buttons.append([KeyboardButton(text="Горячие сегодня"), KeyboardButton(text="Рулетка")])
+    buttons.append([KeyboardButton(text="Топ института"), KeyboardButton(text="Кто смотрел")])
+    buttons.append([KeyboardButton(text="Мои задания"), KeyboardButton(text="Верификация")])
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
 def get_admin_keyboard(has_profile: bool = False):
@@ -22,6 +25,9 @@ def get_admin_keyboard(has_profile: bool = False):
     buttons.append([KeyboardButton(text="Моя анкета"), KeyboardButton(text="Редактировать анкету")])
     buttons.append([KeyboardButton(text="Просмотр анкет"), KeyboardButton(text="Статистика"), KeyboardButton(text="Мой рейтинг")])
     buttons.append([KeyboardButton(text="Топ встреч"), KeyboardButton(text="Удалить анкету")])
+    buttons.append([KeyboardButton(text="Горячие сегодня"), KeyboardButton(text="Рулетка")])
+    buttons.append([KeyboardButton(text="Топ института"), KeyboardButton(text="Кто смотрел")])
+    buttons.append([KeyboardButton(text="Мои задания"), KeyboardButton(text="Верификация")])
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
 # остальные функции без изменений
@@ -30,7 +36,7 @@ def get_edit_keyboard():
         [KeyboardButton(text="Изменить имя"), KeyboardButton(text="Изменить возраст")],
         [KeyboardButton(text="Изменить пол"), KeyboardButton(text="Изменить интересы")],
         [KeyboardButton(text="Изменить институт"), KeyboardButton(text="Изменить описание")],
-        [KeyboardButton(text="Изменить фото")],
+        [KeyboardButton(text="Изменить фото"), KeyboardButton(text="Добавить видео в анкету")],
         [KeyboardButton(text="Пересоздать анкету")],
         [KeyboardButton(text="Назад")]
     ]
@@ -109,4 +115,22 @@ def get_rating_keyboard(target_id: int):
     for i in range(1, 6):
         row.append(InlineKeyboardButton(text=str(i), callback_data=f"rate_{i}_{target_id}"))
     buttons.append(row)
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+def get_roulette_keyboard(profile_id: int) -> InlineKeyboardMarkup:
+    buttons = [
+        [
+            InlineKeyboardButton(text="❤️ Лайкнуть", callback_data=f"roulette_like_{profile_id}"),
+            InlineKeyboardButton(text="➡️ Пропустить", callback_data=f"roulette_pass_{profile_id}")
+        ]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+def get_verification_admin_keyboard(user_id: int) -> InlineKeyboardMarkup:
+    buttons = [
+        [
+            InlineKeyboardButton(text="✅ Верифицировать", callback_data=f"verify_approve_{user_id}"),
+            InlineKeyboardButton(text="❌ Отклонить", callback_data=f"verify_decline_{user_id}")
+        ]
+    ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)

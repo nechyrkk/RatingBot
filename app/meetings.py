@@ -9,15 +9,24 @@ from aiogram.exceptions import TelegramForbiddenError
 from data import (
     get_profile, create_meet_task, get_meet_task_by_id,
     update_meet_task_status, add_points, get_active_meet_task_for_user,
-    update_meet_agreement, DB_PATH  # <-- добавлен DB_PATH
+    update_meet_agreement, DB_PATH, award_badge, get_seasonal_info
 )
 import config
 
 router = Router()
 
+SAFE_LOCATIONS = [
+    "Столовая (корп. А, 1 этаж)",
+    "Библиотека (1 этаж, читальный зал)",
+    "Коворкинг (3 этаж)",
+    "Кафетерий (2 этаж)",
+    "Холл главного входа",
+    "Учебная зона (4 этаж)",
+    "Спортивный холл (вход)"
+]
+
 def generate_location(institute: str) -> str:
-    """Генерирует место встречи в формате А-1 .. А-16."""
-    return f"А-{random.randint(1, 16)}"
+    return random.choice(SAFE_LOCATIONS)
 
 async def create_meet_after_like(bot: Bot, user1_id: int, user2_id: int, initiator_id: int):
     """
@@ -228,16 +237,31 @@ async def admin_confirm_meet(callback: CallbackQuery, bot: Bot):
         await callback.answer("Задание не найдено или уже обработано.", show_alert=True)
         return
 
+    # Сезонный множитель
+    seasonal = get_seasonal_info()
+    multiplier = seasonal['multiplier']
+    points = int(10 * multiplier)
+
     # Начисляем очки обоим пользователям
-    await add_points(task['user1_id'], 10)
-    await add_points(task['user2_id'], 10)
+    await add_points(task['user1_id'], points)
+    await add_points(task['user2_id'], points)
+
+    # Выдаём бейдж за первую встречу
+    await award_badge(task['user1_id'], 'first_meet')
+    await award_badge(task['user2_id'], 'first_meet')
 
     # Обновляем статус
     await update_meet_task_status(task_id, 'confirmed', admin_decision=1)
 
+    # Формируем текст уведомления
+    if seasonal['name']:
+        bonus_text = f" (x{multiplier} — {seasonal['name']})"
+    else:
+        bonus_text = ""
+
     # Уведомляем пользователей
-    await bot.send_message(task['user1_id'], "✅ Ваша встреча подтверждена! Вы получили 10 очков.")
-    await bot.send_message(task['user2_id'], "✅ Ваша встреча подтверждена! Вы получили 10 очков.")
+    await bot.send_message(task['user1_id'], f"✅ Ваша встреча подтверждена! +{points} очков{bonus_text}")
+    await bot.send_message(task['user2_id'], f"✅ Ваша встреча подтверждена! +{points} очков{bonus_text}")
 
     # Удаляем кнопки у сообщения админа
     try:

@@ -10,19 +10,25 @@ import config
 from meetings import create_meet_after_like, router as meet_router
 from matching import get_next_profile
 from rating_system import get_user_rating, add_rating, get_voter_weight
-from states import CreateProfile, EditProfile, BrowseProfiles, SuperLike
+from states import CreateProfile, EditProfile, BrowseProfiles, SuperLike, Verification, RouletteState
 from keyboards import (
     get_main_keyboard, get_edit_keyboard, get_done_keyboard,
     get_back_keyboard, remove_keyboard, get_like_dislike_superlike_keyboard,
     get_reply_keyboard, get_gender_keyboard, get_interests_keyboard,
     get_admin_keyboard, get_delete_confirm_keyboard, get_institute_keyboard,
-    get_rating_keyboard
+    get_rating_keyboard, get_roulette_keyboard, get_verification_admin_keyboard
 )
 from data import (
     save_profile, get_profile, get_all_profiles,
     add_like, add_dislike, get_ratings,
     get_user_stats, get_all_usernames, get_top_users,
-    DB_PATH, delete_profile, INSTITUTES
+    DB_PATH, delete_profile, INSTITUTES,
+    get_hot_profiles, update_streak, get_streak,
+    count_pending_likes, get_top_users_by_institute,
+    award_badge, get_user_badges,
+    get_daily_task_completions, complete_daily_task, count_today_likes,
+    can_use_roulette, set_roulette_used, get_random_profile_other_institute,
+    set_verified, record_profile_view, get_recent_viewers, save_profile_video
 )
 
 router = Router()
@@ -56,6 +62,18 @@ async def cmd_start(message: Message):
         "/cancel – отменить действие",
         reply_markup=keyboard
     )
+    if has_profile:
+        # Задание: вход в бот сегодня
+        login_completed = await complete_daily_task(user_id, 'login')
+        if login_completed:
+            from data import add_points
+            await add_points(user_id, 1)
+            await message.answer("✅ Задание выполнено: вход в бот (+1 очко)")
+        # Уведомление о входящих лайках
+        count = await count_pending_likes(user_id)
+        if count > 0:
+            word = 'человек хочет' if count == 1 else 'человек хотят'
+            await message.answer(f"👀 {count} {word} с тобой познакомиться!")
 
 # --------------------- СТАТИСТИКА (ТОЛЬКО АДМИН) ---------------------
 @router.message(Command("stats"))
@@ -293,8 +311,19 @@ async def show_profile(message: Message, user_id: int, edit_mode: bool = False):
     age = profile['age']
     description = profile['description']
     photos = profile.get('photos', [])
+    verified = profile.get('verified', 0)
 
-    text = f"📝 **Ваша анкета:**\n{name}, {age}\nОписание: {description}"
+    badges = await get_user_badges(user_id)
+    streak = await get_streak(user_id)
+
+    badge_icons = {'first_meet': '🤝', 'superliked': '💌', 'streak_7': '🔥', 'streak_30': '⚡', 'verified': '✅'}
+    badge_line = " ".join(badge_icons.get(b, '') for b in badges)
+    verified_line = " ✅ Верифицирован" if verified else ""
+    streak_line = f"\n🔥 Стрик: {streak} дней" if streak > 0 else ""
+
+    text = f"📝 **Ваша анкета:**{verified_line}\n{name}, {age}{streak_line}\nОписание: {description}"
+    if badge_line:
+        text += f"\nБейджи: {badge_line}"
 
     try:
         if not photos:
@@ -337,7 +366,7 @@ async def cmd_edit(message: Message, state: FSMContext):
 @router.message(EditProfile.choosing_field, F.text.in_([
     "Изменить имя", "Изменить возраст", "Изменить пол", "Изменить интересы",
     "Изменить описание", "Изменить фото", "Изменить институт",
-    "Пересоздать анкету", "Назад"
+    "Добавить видео в анкету", "Пересоздать анкету", "Назад"
 ]))
 async def process_edit_choice(message: Message, state: FSMContext):
     choice = message.text
@@ -381,6 +410,18 @@ async def process_edit_choice(message: Message, state: FSMContext):
     elif choice == "Изменить институт":
         await state.set_state(EditProfile.waiting_for_new_institute)
         await message.answer("Выберите новый институт:", reply_markup=get_institute_keyboard())
+    elif choice == "Добавить видео в анкету":
+        await state.set_state(EditProfile.waiting_for_new_video)
+        from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
+        kb = ReplyKeyboardMarkup(
+            keyboard=[[KeyboardButton(text="Убрать видео")], [KeyboardButton(text="Назад")]],
+            resize_keyboard=True
+        )
+        await message.answer(
+            "Отправьте видеосообщение (кружок) для добавления в анкету.\n"
+            "Или нажмите «Убрать видео», чтобы удалить текущее.",
+            reply_markup=kb
+        )
 
 # ---- Обработчики изменения полей ----
 @router.message(EditProfile.waiting_for_new_name)
@@ -579,6 +620,34 @@ async def finish_edit_photos(message: Message, state: FSMContext):
     await message.answer("Фотографии обновлены!", reply_markup=keyboard)
     await show_profile(message, user_id, edit_mode=True)
 
+# --------------------- ВИДЕО В АНКЕТЕ (фича 13) ---------------------
+@router.message(EditProfile.waiting_for_new_video, F.video_note)
+async def process_profile_video(message: Message, state: FSMContext):
+    user_id = message.from_user.id
+    await save_profile_video(user_id, message.video_note.file_id)
+    await state.clear()
+    is_admin = (user_id in config.ADMIN_IDS)
+    keyboard = get_admin_keyboard(True) if is_admin else get_main_keyboard(True)
+    await message.answer("Видео добавлено в анкету!", reply_markup=keyboard)
+
+@router.message(EditProfile.waiting_for_new_video, F.text == "Убрать видео")
+async def remove_profile_video(message: Message, state: FSMContext):
+    user_id = message.from_user.id
+    await save_profile_video(user_id, None)
+    await state.clear()
+    is_admin = (user_id in config.ADMIN_IDS)
+    keyboard = get_admin_keyboard(True) if is_admin else get_main_keyboard(True)
+    await message.answer("Видео удалено из анкеты.", reply_markup=keyboard)
+
+@router.message(EditProfile.waiting_for_new_video, F.text == "Назад")
+async def cancel_profile_video(message: Message, state: FSMContext):
+    await state.set_state(EditProfile.choosing_field)
+    await message.answer("Выберите, что хотите изменить:", reply_markup=get_edit_keyboard())
+
+@router.message(EditProfile.waiting_for_new_video)
+async def handle_invalid_video(message: Message):
+    await message.answer("Пожалуйста, отправьте видеосообщение (кружок) или нажмите «Убрать видео».")
+
 # --------------------- УДАЛЕНИЕ АНКЕТЫ ---------------------
 @router.message(F.text == "Удалить анкету")
 async def cmd_delete_profile(message: Message, state: FSMContext):
@@ -648,18 +717,25 @@ async def cmd_browse(message: Message, state: FSMContext):
 
 async def show_profile_by_id(target_message: Message, profile_id: int, state: FSMContext):
     """Показывает анкету с заданным ID, обновляет состояние."""
+    viewer_id = target_message.from_user.id
+
     profile = await get_profile(profile_id)
     if not profile:
         # Если анкета исчезла, переходим к следующей
-        await show_next_profile(target_message, target_message.from_user.id, state)
+        await show_next_profile(target_message, viewer_id, state)
         return
+
+    # Записываем просмотр
+    await record_profile_view(viewer_id, profile_id)
 
     name = profile['name']
     age = profile['age']
     description = profile['description']
     photos = profile.get('photos', [])
+    video_file_id = profile.get('video_file_id')
 
-    text = f"👤 **Анкета:**\n{name}, {age}\nОписание: {description}"
+    verified_mark = " ✅" if profile.get('verified') else ""
+    text = f"👤 **Анкета:**\n{name}, {age}{verified_mark}\nОписание: {description}"
 
     try:
         if not photos:
@@ -700,6 +776,13 @@ async def show_profile_by_id(target_message: Message, profile_id: int, state: FS
             reply_markup=get_like_dislike_superlike_keyboard(profile_id)
         )
         await state.update_data(last_message_id=sent.message_id)
+
+    # Показываем видео-кружок, если есть
+    if video_file_id:
+        try:
+            await target_message.answer_video_note(video_file_id)
+        except Exception as e:
+            logging.warning(f"Не удалось отправить видео анкеты {profile_id}: {e}")
 
     # Сохраняем ID текущей анкеты
     await state.update_data(current_profile_id=profile_id)
@@ -775,6 +858,25 @@ async def handle_reaction(callback: CallbackQuery, state: FSMContext, bot: Bot):
 
     if action == "like":
         await add_like(user_id, target_id)
+
+        # Обновляем стрик и проверяем milestone
+        streak_result = await update_streak(user_id)
+        if streak_result.get('milestone'):
+            milestone = streak_result['milestone']
+            badge_type = f'streak_{milestone}'
+            is_new = await award_badge(user_id, badge_type)
+            if is_new:
+                await callback.message.answer(f"🔥 Стрик {milestone} дней! Получен бейдж!")
+
+        # Задание: лайкнуть 3 анкеты
+        today_likes = await count_today_likes(user_id)
+        if today_likes >= 3:
+            completed = await complete_daily_task(user_id, 'like_3')
+            if completed:
+                from data import add_points
+                await add_points(user_id, 2)
+                await callback.message.answer("✅ Задание выполнено: 3 лайка за день (+2 очка)")
+
         target_profile = await get_profile(target_id)
         user_profile = await get_profile(user_id)
         if target_profile and user_profile and is_compatible(user_profile['gender'], target_profile['interests']):
@@ -846,11 +948,20 @@ async def process_superlike_message(message: Message, state: FSMContext, bot: Bo
 
     if compatible:
         await send_superlike_notification(bot, user_id, target_id, super_text)
+        # Бейдж получателю суперлайка
+        await award_badge(target_id, 'superliked')
         target_ratings = await get_ratings(target_id)
         if user_id in target_ratings['liked']:
             await notify_mutual_like(bot, user_id, target_id)
     else:
         await message.answer("Суперлайк сохранён (пользователь не увидит из-за настроек интересов).")
+
+    # Задание: отправить суперлайк
+    completed = await complete_daily_task(user_id, 'superlike')
+    if completed:
+        from data import add_points
+        await add_points(user_id, 3)
+        await message.answer("✅ Задание выполнено: суперлайк отправлен (+3 очка)")
 
     # Очищаем состояние суперлайка и возвращаемся в режим просмотра
     await state.update_data(superlike_target=None)  # удаляем временные данные
@@ -1118,3 +1229,235 @@ async def handle_invalid_new_interests(message: Message):
 @router.message(BrowseProfiles.browsing)
 async def handle_in_browsing(message: Message):
     await message.answer("Для возврата в меню используйте кнопку 'Назад в меню'.")
+
+# --------------------- ГОРЯЧИЕ СЕГОДНЯ (фича 1) ---------------------
+@router.message(F.text == "Горячие сегодня")
+async def cmd_hot_today(message: Message):
+    hot_ids = await get_hot_profiles(3)
+    if not hot_ids:
+        await message.answer("Пока нет активности за последние 24 часа.")
+        return
+    await message.answer("🔥 **Горячие анкеты за последние 24 часа:**", parse_mode="Markdown")
+    for uid in hot_ids:
+        profile = await get_profile(uid)
+        if not profile:
+            continue
+        name = profile['name']
+        age = profile['age']
+        description = profile['description']
+        photos = profile.get('photos', [])
+        verified_mark = " ✅" if profile.get('verified') else ""
+        text = f"👤 {name}, {age}{verified_mark}\n{description}"
+        try:
+            if photos:
+                await message.answer_photo(photo=photos[0], caption=text)
+            else:
+                await message.answer(text)
+        except Exception as e:
+            logging.warning(f"Не удалось отправить горячую анкету {uid}: {e}")
+            await message.answer(text)
+
+# --------------------- ТОП ИНСТИТУТА (фича 5) ---------------------
+@router.message(F.text == "Топ института")
+async def cmd_institute_top(message: Message):
+    user_id = message.from_user.id
+    profile = await get_profile(user_id)
+    if not profile:
+        await message.answer("Сначала создайте анкету.")
+        return
+    institute = profile['institute']
+    top = await get_top_users_by_institute(institute, 10)
+    if not top:
+        await message.answer(f"В вашем институте ({institute}) пока нет встреч в этом месяце.")
+        return
+    lines = [f"🏆 **Топ {institute} за текущий месяц:**"]
+    for idx, (uid, name, points) in enumerate(top, 1):
+        lines.append(f"{idx}. {name} — {points} очков")
+    await message.answer("\n".join(lines), parse_mode="Markdown")
+
+# --------------------- РУЛЕТКА (фича 9) ---------------------
+@router.message(F.text == "Рулетка")
+async def cmd_roulette(message: Message, state: FSMContext):
+    user_id = message.from_user.id
+    profile = await get_profile(user_id)
+    if not profile:
+        await message.answer("Сначала создайте анкету.")
+        return
+
+    if not await can_use_roulette(user_id):
+        await message.answer("🎰 Рулетка уже использована сегодня. Возвращайся завтра!")
+        return
+
+    own_institute = profile['institute']
+    random_id = await get_random_profile_other_institute(user_id, own_institute)
+    if not random_id:
+        await message.answer("Пока нет анкет из других институтов.")
+        return
+
+    roulette_profile = await get_profile(random_id)
+    if not roulette_profile:
+        await message.answer("Не удалось загрузить анкету. Попробуй позже.")
+        return
+
+    name = roulette_profile['name']
+    age = roulette_profile['age']
+    description = roulette_profile['description']
+    photos = roulette_profile.get('photos', [])
+    inst = roulette_profile['institute']
+    verified_mark = " ✅" if roulette_profile.get('verified') else ""
+
+    text = f"🎰 **Рулетка! Анкета из {inst}:**\n{name}, {age}{verified_mark}\n{description}"
+
+    await state.set_state(RouletteState.viewing)
+    await state.update_data(current_roulette_id=random_id)
+
+    try:
+        if photos:
+            await message.answer_photo(
+                photo=photos[0],
+                caption=text,
+                parse_mode="Markdown",
+                reply_markup=get_roulette_keyboard(random_id)
+            )
+        else:
+            await message.answer(
+                text,
+                parse_mode="Markdown",
+                reply_markup=get_roulette_keyboard(random_id)
+            )
+    except Exception as e:
+        logging.error(f"Ошибка рулетки для {random_id}: {e}")
+        await message.answer(text, parse_mode="Markdown", reply_markup=get_roulette_keyboard(random_id))
+
+@router.callback_query(RouletteState.viewing, F.data.startswith("roulette_like_"))
+async def handle_roulette_like(callback: CallbackQuery, state: FSMContext, bot: Bot):
+    target_id = int(callback.data.split("_")[2])
+    user_id = callback.from_user.id
+
+    await add_like(user_id, target_id)
+    await set_roulette_used(user_id)
+
+    target_profile = await get_profile(target_id)
+    user_profile = await get_profile(user_id)
+    if target_profile and user_profile and is_compatible(user_profile['gender'], target_profile['interests']):
+        target_ratings = await get_ratings(target_id)
+        if user_id in target_ratings['liked']:
+            await notify_mutual_like(bot, user_id, target_id)
+        else:
+            await send_like_notification(bot, user_id, target_id)
+
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await callback.answer("Лайк отправлен!")
+    await state.clear()
+
+@router.callback_query(RouletteState.viewing, F.data.startswith("roulette_pass_"))
+async def handle_roulette_pass(callback: CallbackQuery, state: FSMContext):
+    await set_roulette_used(callback.from_user.id)
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await callback.answer("Пропущено.")
+    await state.clear()
+
+# --------------------- КТО СМОТРЕЛ (фича 12) ---------------------
+@router.message(F.text == "Кто смотрел")
+async def cmd_who_viewed(message: Message):
+    user_id = message.from_user.id
+    viewers = await get_recent_viewers(user_id, 5)
+    if not viewers:
+        await message.answer("Пока никто не смотрел вашу анкету.")
+        return
+    lines = ["👁 **Недавно смотрели вашу анкету:**"]
+    for v in viewers:
+        lines.append(f"• {v['name']} — {v['viewed_at'][:10]}")
+    await message.answer("\n".join(lines), parse_mode="Markdown")
+
+# --------------------- МОИ ЗАДАНИЯ (фича 7) ---------------------
+@router.message(F.text == "Мои задания")
+async def cmd_daily_tasks(message: Message):
+    user_id = message.from_user.id
+    done = await get_daily_task_completions(user_id)
+    login_done = "✅" if "login" in done else "⬜"
+    like3_done = "✅" if "like_3" in done else "⬜"
+    superlike_done = "✅" if "superlike" in done else "⬜"
+    text = (
+        "📋 **Ежедневные задания:**\n\n"
+        f"{login_done} Войти в бот сегодня (+1 очко)\n"
+        f"{like3_done} Лайкнуть 3 анкеты (+2 очка)\n"
+        f"{superlike_done} Отправить суперлайк (+3 очка)"
+    )
+    await message.answer(text, parse_mode="Markdown")
+
+# --------------------- ВЕРИФИКАЦИЯ (фича 10) ---------------------
+@router.message(F.text == "Верификация")
+async def cmd_verification(message: Message, state: FSMContext):
+    user_id = message.from_user.id
+    profile = await get_profile(user_id)
+    if not profile:
+        await message.answer("Сначала создайте анкету.")
+        return
+    if profile.get('verified'):
+        await message.answer("✅ Вы уже верифицированы!")
+        return
+    await state.set_state(Verification.waiting_for_card)
+    await message.answer(
+        "Для верификации отправьте фото студенческого билета.\n"
+        "Это подтвердит, что вы студент.",
+        reply_markup=remove_keyboard
+    )
+
+@router.message(Verification.waiting_for_card, F.photo)
+async def process_verification_card(message: Message, state: FSMContext, bot: Bot):
+    user_id = message.from_user.id
+    if not config.ADMIN_IDS:
+        await state.clear()
+        await message.answer("Ошибка: не назначен администратор.")
+        return
+
+    admin_id = config.ADMIN_IDS[0]
+    # Пересылаем фото администратору
+    await bot.send_message(admin_id, f"🎓 Запрос на верификацию от пользователя {user_id}")
+    await bot.send_photo(
+        admin_id,
+        photo=message.photo[-1].file_id,
+        caption=f"Студенческий билет от {user_id}",
+        reply_markup=get_verification_admin_keyboard(user_id)
+    )
+
+    await state.clear()
+    is_admin = (user_id in config.ADMIN_IDS)
+    keyboard = get_admin_keyboard(True) if is_admin else get_main_keyboard(True)
+    await message.answer(
+        "Фото отправлено на проверку. Ожидайте решения администратора.",
+        reply_markup=keyboard
+    )
+
+@router.message(Verification.waiting_for_card)
+async def handle_invalid_verification(message: Message):
+    await message.answer("Пожалуйста, отправьте фотографию студенческого билета.")
+
+@router.callback_query(F.data.startswith("verify_approve_"))
+async def admin_verify_approve(callback: CallbackQuery, bot: Bot):
+    if callback.from_user.id not in config.ADMIN_IDS:
+        await callback.answer("Нет прав.", show_alert=True)
+        return
+    uid = int(callback.data.split("_")[2])
+    await set_verified(uid, 1)
+    await award_badge(uid, 'verified')
+    try:
+        await bot.send_message(uid, "✅ Ваша верификация одобрена! Вы получили значок верификации.")
+    except Exception as e:
+        logging.warning(f"Не удалось уведомить пользователя {uid} о верификации: {e}")
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await callback.answer("Пользователь верифицирован.")
+
+@router.callback_query(F.data.startswith("verify_decline_"))
+async def admin_verify_decline(callback: CallbackQuery, bot: Bot):
+    if callback.from_user.id not in config.ADMIN_IDS:
+        await callback.answer("Нет прав.", show_alert=True)
+        return
+    uid = int(callback.data.split("_")[2])
+    try:
+        await bot.send_message(uid, "❌ Ваш запрос на верификацию отклонён. Попробуйте снова с более чётким фото.")
+    except Exception as e:
+        logging.warning(f"Не удалось уведомить пользователя {uid} об отказе: {e}")
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await callback.answer("Запрос отклонён.")
