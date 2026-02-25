@@ -1,6 +1,7 @@
 import logging
 import random
-from aiogram import Router, F, Bot
+from typing import Callable, Awaitable, Any
+from aiogram import Router, F, Bot, BaseMiddleware
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, CallbackQuery, InputMediaPhoto
@@ -35,6 +36,44 @@ from data import (
 router = Router()
 router.include_router(meet_router)
 MAX_PHOTOS = 3
+
+# Тексты кнопок клавиатуры, которые нужно удалять из чата
+_BUTTON_TEXTS = {
+    # Главное меню
+    "Создать анкету", "Моя анкета", "Редактировать анкету",
+    "Просмотр анкет", "Мой рейтинг", "Топ встреч", "Мои задания", "Рулетка",
+    # Меню "Ещё"
+    "⚙️ Ещё...", "← Назад", "Горячие сегодня", "Топ института",
+    "Кто смотрел", "Верификация", "Статистика", "Удалить анкету",
+    # Навигация
+    "Назад в меню", "Назад",
+    # Меню редактирования
+    "Изменить имя", "Изменить возраст", "Изменить пол", "Изменить интересы",
+    "Изменить институт", "Изменить описание", "Изменить фото",
+    "Добавить видео в анкету", "Пересоздать анкету",
+    # Прочие кнопки
+    "Готово", "Убрать видео",
+    # Выбор пола и интересов
+    "Парень", "Девушка", "Парни", "Девушки", "Все",
+    # Институты
+    *INSTITUTES,
+}
+
+class _DeleteButtonMiddleware(BaseMiddleware):
+    async def __call__(
+        self,
+        handler: Callable[[Message, dict[str, Any]], Awaitable[Any]],
+        event: Message,
+        data: dict[str, Any],
+    ) -> Any:
+        if event.text and event.text in _BUTTON_TEXTS:
+            try:
+                await event.delete()
+            except Exception:
+                pass
+        return await handler(event, data)
+
+router.message.outer_middleware(_DeleteButtonMiddleware())
 
 def is_compatible(liker_gender: str, target_interests: str) -> bool:
     if target_interests == "Парни":
