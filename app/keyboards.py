@@ -68,9 +68,9 @@ remove_keyboard = ReplyKeyboardRemove()
 def get_like_dislike_superlike_keyboard(owner_id: int):
     buttons = [
         [
-            InlineKeyboardButton(text="❤️ Лайк", callback_data=f"like_{owner_id}"),
-            InlineKeyboardButton(text="⭐ Суперлайк", callback_data=f"superlike_{owner_id}"),
-            InlineKeyboardButton(text="👎 Дизлайк", callback_data=f"dislike_{owner_id}")
+            InlineKeyboardButton(text="❤️", callback_data=f"like_{owner_id}"),
+            InlineKeyboardButton(text="💌", callback_data=f"superlike_{owner_id}"),
+            InlineKeyboardButton(text="👎", callback_data=f"dislike_{owner_id}")
         ]
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
