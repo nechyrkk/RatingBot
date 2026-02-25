@@ -763,7 +763,11 @@ async def send_profile_to_user(bot: Bot, to_user_id: int, profile: dict, custom_
 # --------------------- ОБРАБОТКА РЕАКЦИЙ ---------------------
 @router.callback_query(BrowseProfiles.browsing, F.data.startswith(("like_", "dislike_", "superlike_")))
 async def handle_reaction(callback: CallbackQuery, state: FSMContext, bot: Bot):
-    action, target_id_str = callback.data.split("_")
+    parts = callback.data.split("_", 1)
+    if len(parts) != 2:
+        await callback.answer()
+        return
+    action, target_id_str = parts
     target_id = int(target_id_str)
     user_id = callback.from_user.id
 
@@ -818,10 +822,6 @@ async def handle_reaction(callback: CallbackQuery, state: FSMContext, bot: Bot):
 
         await callback.answer()
 
-        # Подтверждаем нажатие кнопки
-        await callback.answer()
-
-@router.message(SuperLike.waiting_for_message)
 @router.message(SuperLike.waiting_for_message)
 async def process_superlike_message(message: Message, state: FSMContext, bot: Bot):
     data = await state.get_data()
@@ -1008,6 +1008,9 @@ async def notify_mutual_like(bot: Bot, user_id: int, target_id: int):
 @router.callback_query(F.data.startswith("rate_"))
 async def process_rating(callback: CallbackQuery):
     data_parts = callback.data.split("_")
+    if len(data_parts) < 3:
+        await callback.answer()
+        return
     value = int(data_parts[1])
     target_id = int(data_parts[2])
     voter_id = callback.from_user.id
@@ -1026,6 +1029,9 @@ async def process_rating(callback: CallbackQuery):
 @router.callback_query(F.data.startswith(("reply_like_", "reply_dislike_")))
 async def handle_reply_callback(callback: CallbackQuery, bot: Bot):
     parts = callback.data.split("_")
+    if len(parts) < 3:
+        await callback.answer()
+        return
     action = parts[1]
     liker_id = int(parts[2])
     user_id = callback.from_user.id

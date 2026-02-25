@@ -141,7 +141,10 @@ async def get_profile(user_id: int) -> Optional[Dict[str, Any]]:
             row = await cursor.fetchone()
             if row:
                 name, age, gender, interests, institute, description, photos_json = row
-                photos = json.loads(photos_json)
+                try:
+                    photos = json.loads(photos_json)
+                except (json.JSONDecodeError, TypeError):
+                    photos = []
                 return {
                     'name': name,
                     'age': age,
@@ -160,7 +163,10 @@ async def get_all_profiles() -> Dict[int, Dict[str, Any]]:
             profiles = {}
             for row in rows:
                 user_id, name, age, gender, interests, institute, description, photos_json = row
-                photos = json.loads(photos_json)
+                try:
+                    photos = json.loads(photos_json)
+                except (json.JSONDecodeError, TypeError):
+                    photos = []
                 profiles[user_id] = {
                     'name': name,
                     'age': age,

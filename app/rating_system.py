@@ -20,17 +20,18 @@ async def get_voter_weight(voter_id: int) -> float:
 
 async def add_rating(from_user_id: int, to_user_id: int, value: int, voter_weight: float):
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            'INSERT INTO ratings (from_user_id, to_user_id, value, voter_weight) VALUES (?, ?, ?, ?)',
+        cursor = await db.execute(
+            'INSERT OR IGNORE INTO ratings (from_user_id, to_user_id, value, voter_weight) VALUES (?, ?, ?, ?)',
             (from_user_id, to_user_id, value, voter_weight)
         )
-        await db.execute(
-            '''
-            UPDATE profiles 
-            SET rating_sum = rating_sum + ? * ?,
-                rating_weight = rating_weight + ?
-            WHERE user_id = ?
-            ''',
-            (value, voter_weight, voter_weight, to_user_id)
-        )
+        if cursor.rowcount > 0:
+            await db.execute(
+                '''
+                UPDATE profiles
+                SET rating_sum = rating_sum + ? * ?,
+                    rating_weight = rating_weight + ?
+                WHERE user_id = ?
+                ''',
+                (value, voter_weight, voter_weight, to_user_id)
+            )
         await db.commit()
