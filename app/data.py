@@ -176,7 +176,7 @@ async def init_db():
         columns = await cursor.fetchall()
         column_names = [col[1] for col in columns]
         if 'created_at' not in column_names:
-            await db.execute("ALTER TABLE likes ADD COLUMN created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+            await db.execute("ALTER TABLE likes ADD COLUMN created_at TIMESTAMP")
             print("Добавлена колонка created_at в likes")
 
         await db.commit()
