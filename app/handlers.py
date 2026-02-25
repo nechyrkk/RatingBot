@@ -16,7 +16,8 @@ from keyboards import (
     get_back_keyboard, remove_keyboard, get_like_dislike_superlike_keyboard,
     get_reply_keyboard, get_gender_keyboard, get_interests_keyboard,
     get_admin_keyboard, get_delete_confirm_keyboard, get_institute_keyboard,
-    get_rating_keyboard, get_roulette_keyboard, get_verification_admin_keyboard
+    get_rating_keyboard, get_roulette_keyboard, get_verification_admin_keyboard,
+    get_more_keyboard
 )
 from data import (
     save_profile, get_profile, get_all_profiles,
@@ -1230,11 +1231,30 @@ _MENU_BUTTONS = {
     "Горячие сегодня", "Рулетка", "Топ института", "Кто смотрел",
     "Мои задания", "Верификация", "Топ встреч", "Мой рейтинг",
     "Моя анкета", "Редактировать анкету", "Удалить анкету", "Статистика",
+    "⚙️ Ещё...", "← Назад",
 }
 
 @router.message(BrowseProfiles.browsing, ~F.text.in_(_MENU_BUTTONS))
 async def handle_in_browsing(message: Message):
     await message.answer("Для возврата в меню используйте кнопку 'Назад в меню'.")
+
+# --------------------- МЕНЮ "ЕЩЁ" ---------------------
+@router.message(F.text == "⚙️ Ещё...")
+async def cmd_more_menu(message: Message):
+    user_id = message.from_user.id
+    profile = await get_profile(user_id)
+    verified = bool(profile.get('verified', 0)) if profile else False
+    is_admin = user_id in config.ADMIN_IDS
+    await message.answer("Дополнительные функции:", reply_markup=get_more_keyboard(verified=verified, is_admin=is_admin))
+
+@router.message(F.text == "← Назад")
+async def cmd_back_from_more(message: Message, state: FSMContext):
+    await state.clear()
+    user_id = message.from_user.id
+    is_admin = user_id in config.ADMIN_IDS
+    has_profile = await get_profile(user_id) is not None
+    keyboard = get_admin_keyboard(has_profile) if is_admin else get_main_keyboard(has_profile)
+    await message.answer("Главное меню", reply_markup=keyboard)
 
 # --------------------- ГОРЯЧИЕ СЕГОДНЯ (фича 1) ---------------------
 @router.message(F.text == "Горячие сегодня")

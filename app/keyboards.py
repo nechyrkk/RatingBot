@@ -10,24 +10,36 @@ def get_main_keyboard(has_profile: bool = False):
     buttons = []
     if not has_profile:
         buttons.append([KeyboardButton(text="Создать анкету")])
-    buttons.append([KeyboardButton(text="Моя анкета"), KeyboardButton(text="Редактировать анкету")])
-    buttons.append([KeyboardButton(text="Просмотр анкет"), KeyboardButton(text="Мой рейтинг")])
-    buttons.append([KeyboardButton(text="Топ встреч"), KeyboardButton(text="Удалить анкету")])
-    buttons.append([KeyboardButton(text="Горячие сегодня"), KeyboardButton(text="Рулетка")])
-    buttons.append([KeyboardButton(text="Топ института"), KeyboardButton(text="Кто смотрел")])
-    buttons.append([KeyboardButton(text="Мои задания"), KeyboardButton(text="Верификация")])
+    buttons.append([KeyboardButton(text="Моя анкета"), KeyboardButton(text="Просмотр анкет")])
+    buttons.append([KeyboardButton(text="Рулетка"), KeyboardButton(text="Мой рейтинг")])
+    buttons.append([KeyboardButton(text="Топ встреч"), KeyboardButton(text="Мои задания")])
+    buttons.append([KeyboardButton(text="Редактировать анкету"), KeyboardButton(text="⚙️ Ещё...")])
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
 def get_admin_keyboard(has_profile: bool = False):
     buttons = []
     if not has_profile:
         buttons.append([KeyboardButton(text="Создать анкету")])
-    buttons.append([KeyboardButton(text="Моя анкета"), KeyboardButton(text="Редактировать анкету")])
-    buttons.append([KeyboardButton(text="Просмотр анкет"), KeyboardButton(text="Статистика"), KeyboardButton(text="Мой рейтинг")])
-    buttons.append([KeyboardButton(text="Топ встреч"), KeyboardButton(text="Удалить анкету")])
-    buttons.append([KeyboardButton(text="Горячие сегодня"), KeyboardButton(text="Рулетка")])
-    buttons.append([KeyboardButton(text="Топ института"), KeyboardButton(text="Кто смотрел")])
-    buttons.append([KeyboardButton(text="Мои задания"), KeyboardButton(text="Верификация")])
+    buttons.append([KeyboardButton(text="Моя анкета"), KeyboardButton(text="Просмотр анкет")])
+    buttons.append([KeyboardButton(text="Рулетка"), KeyboardButton(text="Мой рейтинг")])
+    buttons.append([KeyboardButton(text="Топ встреч"), KeyboardButton(text="Мои задания")])
+    buttons.append([KeyboardButton(text="Редактировать анкету"), KeyboardButton(text="⚙️ Ещё...")])
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+
+def get_more_keyboard(verified: bool = False, is_admin: bool = False) -> ReplyKeyboardMarkup:
+    buttons = [
+        [KeyboardButton(text="Горячие сегодня"), KeyboardButton(text="Топ института")],
+    ]
+    row2 = [KeyboardButton(text="Кто смотрел")]
+    if not verified:
+        row2.append(KeyboardButton(text="Верификация"))
+    buttons.append(row2)
+    row3 = []
+    if is_admin:
+        row3.append(KeyboardButton(text="Статистика"))
+    row3.append(KeyboardButton(text="Удалить анкету"))
+    buttons.append(row3)
+    buttons.append([KeyboardButton(text="← Назад")])
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
 # остальные функции без изменений
