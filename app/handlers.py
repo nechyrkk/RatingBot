@@ -1226,7 +1226,13 @@ async def handle_invalid_new_gender(message: Message):
 async def handle_invalid_new_interests(message: Message):
     await message.answer("Пожалуйста, выберите интересы, используя кнопки.", reply_markup=get_interests_keyboard())
 
-@router.message(BrowseProfiles.browsing)
+_MENU_BUTTONS = {
+    "Горячие сегодня", "Рулетка", "Топ института", "Кто смотрел",
+    "Мои задания", "Верификация", "Топ встреч", "Мой рейтинг",
+    "Моя анкета", "Редактировать анкету", "Удалить анкету", "Статистика",
+}
+
+@router.message(BrowseProfiles.browsing, ~F.text.in_(_MENU_BUTTONS))
 async def handle_in_browsing(message: Message):
     await message.answer("Для возврата в меню используйте кнопку 'Назад в меню'.")
 
