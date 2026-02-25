@@ -294,7 +294,7 @@ async def show_profile(message: Message, user_id: int, edit_mode: bool = False):
     description = profile['description']
     photos = profile.get('photos', [])
 
-    text = f"📝 **Ваша анкета:**\nИмя: {name}\nВозраст: {age}\nОписание: {description}"
+    text = f"📝 **Ваша анкета:**\n{name}, {age}\nОписание: {description}"
 
     try:
         if not photos:
@@ -659,7 +659,7 @@ async def show_profile_by_id(target_message: Message, profile_id: int, state: FS
     description = profile['description']
     photos = profile.get('photos', [])
 
-    text = f"👤 **Анкета:**\nИмя: {name}\nВозраст: {age}\nОписание: {description}"
+    text = f"👤 **Анкета:**\n{name}, {age}\nОписание: {description}"
 
     try:
         if not photos:
@@ -737,7 +737,7 @@ async def send_profile_to_user(bot: Bot, to_user_id: int, profile: dict, custom_
     else:
         header = ""
 
-    text = f"{header}👤 **Анкета:**\nИмя: {name}\nВозраст: {age}\nОписание: {description}"
+    text = f"{header}👤 **Анкета:**\n{name}, {age}\nОписание: {description}"
 
     try:
         if not photos:
@@ -870,7 +870,7 @@ async def send_like_notification(bot: Bot, liker_id: int, target_id: int):
     description = liker_profile['description']
     photos = liker_profile.get('photos', [])
 
-    text = f"💌 Пользователь {name} лайкнул вашу анкету!\n\n👤 **Анкета:**\nИмя: {name}\nВозраст: {age}\nОписание: {description}"
+    text = f"💌 Пользователь {name} лайкнул вашу анкету!\n\n👤 **Анкета:**\n{name}, {age}\nОписание: {description}"
 
     try:
         if not photos:
@@ -919,7 +919,7 @@ async def send_superlike_notification(bot: Bot, liker_id: int, target_id: int, c
     description = liker_profile['description']
     photos = liker_profile.get('photos', [])
 
-    text = f"💌 Пользователь {name} отправил вам суперлайк!\n\n✉️ Сообщение: {custom_message}\n\n👤 **Анкета:**\nИмя: {name}\nВозраст: {age}\nОписание: {description}"
+    text = f"💌 Пользователь {name} отправил вам суперлайк!\n\n✉️ Сообщение: {custom_message}\n\n👤 **Анкета:**\n{name}, {age}\nОписание: {description}"
 
     try:
         if not photos:
