@@ -212,6 +212,17 @@ async def cmd_cancel(message: Message, state: FSMContext):
 
 @router.message(F.text == "Назад в меню")
 async def back_to_menu_general(message: Message, state: FSMContext):
+    data = await state.get_data()
+    last_msg_id = data.get('last_message_id')
+    if last_msg_id:
+        try:
+            await message.bot.edit_message_reply_markup(
+                chat_id=message.chat.id,
+                message_id=last_msg_id,
+                reply_markup=None
+            )
+        except Exception:
+            pass
     await state.clear()
     user_id = message.from_user.id
     is_admin = (user_id in config.ADMIN_IDS)
