@@ -1212,7 +1212,11 @@ async def back_to_menu(message: Message, state: FSMContext):
     last_msg_id = data.get('last_message_id')
     if last_msg_id:
         try:
-            await message.bot.delete_message(chat_id=message.chat.id, message_id=last_msg_id)
+            await message.bot.edit_message_reply_markup(
+                chat_id=message.chat.id,
+                message_id=last_msg_id,
+                reply_markup=None
+            )
         except Exception:
             pass
     await state.clear()
