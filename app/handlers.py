@@ -1208,6 +1208,13 @@ async def handle_reply_callback(callback: CallbackQuery, bot: Bot):
 # --------------------- ВОЗВРАТ В МЕНЮ ИЗ РЕЖИМА ПРОСМОТРА ---------------------
 @router.message(BrowseProfiles.browsing, F.text == "Назад в меню")
 async def back_to_menu(message: Message, state: FSMContext):
+    data = await state.get_data()
+    last_msg_id = data.get('last_message_id')
+    if last_msg_id:
+        try:
+            await message.bot.delete_message(chat_id=message.chat.id, message_id=last_msg_id)
+        except Exception:
+            pass
     await state.clear()
     user_id = message.from_user.id
     is_admin = (user_id in config.ADMIN_IDS)
