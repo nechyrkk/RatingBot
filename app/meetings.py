@@ -3,8 +3,10 @@ import datetime
 import logging
 import aiosqlite  # <-- добавлено
 from aiogram import Router, F, Bot
+from aiogram.filters import StateFilter
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.exceptions import TelegramForbiddenError
+from states import EditProfile
 
 from data import (
     get_profile, create_meet_task, get_meet_task_by_id,
@@ -190,6 +192,9 @@ async def handle_video_message(message: Message, bot: Bot):
     if not task:
         await message.answer("У вас нет активных заданий на отправку видео.")
         return
+    # Принимаем видео только от инициатора
+    if task['initiator_id'] != user_id:
+        return
 
     # Проверяем наличие администраторов
     if not config.ADMIN_IDS:
@@ -225,7 +230,7 @@ async def handle_video_message(message: Message, bot: Bot):
 
     await message.answer("Видео отправлено администратору. Ожидайте подтверждения.")
 
-@router.message(F.video_note)
+@router.message(~StateFilter(EditProfile.waiting_for_new_video), F.video_note)
 async def video_note_handler(message: Message, bot: Bot):
     await handle_video_message(message, bot)
 
@@ -264,16 +269,6 @@ async def admin_confirm_meet(callback: CallbackQuery, bot: Bot):
     await bot.send_message(task['user1_id'], f"✅ Ваша встреча подтверждена! +{points} очков{bonus_text}")
     await bot.send_message(task['user2_id'], f"✅ Ваша встреча подтверждена! +{points} очков{bonus_text}")
 
-    # Удаляем кнопки у сообщения админа
-    try:
-        await bot.edit_message_reply_markup(
-            chat_id=callback.message.chat.id,
-            message_id=task['video_message_id'],
-            reply_markup=None
-        )
-    except Exception as e:
-        logging.warning(f"Не удалось удалить кнопки у видео: {e}")
-
     await callback.message.edit_reply_markup(reply_markup=None)
     await callback.answer("Встреча подтверждена, очки начислены.")
 
@@ -290,15 +285,6 @@ async def admin_decline_meet(callback: CallbackQuery, bot: Bot):
 
     await bot.send_message(task['user1_id'], "❌ Ваша встреча не подтверждена администратором. Очки не начислены.")
     await bot.send_message(task['user2_id'], "❌ Встреча не подтверждена.")
-
-    try:
-        await bot.edit_message_reply_markup(
-            chat_id=callback.message.chat.id,
-            message_id=task['video_message_id'],
-            reply_markup=None
-        )
-    except Exception as e:
-        logging.warning(f"Не удалось удалить кнопки у видео: {e}")
 
     await callback.message.edit_reply_markup(reply_markup=None)
     await callback.answer("Встреча отклонена.")

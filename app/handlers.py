@@ -24,7 +24,7 @@ from data import (
     save_profile, get_profile, get_all_profiles,
     add_like, add_dislike, get_ratings,
     get_user_stats, get_all_usernames, get_top_users,
-    DB_PATH, delete_profile, INSTITUTES,
+    DB_PATH, delete_profile, INSTITUTES, add_points,
     get_hot_profiles, update_streak, get_streak,
     count_pending_likes, get_top_users_by_institute,
     award_badge, get_user_badges,
@@ -36,6 +36,13 @@ from data import (
 router = Router()
 router.include_router(meet_router)
 MAX_PHOTOS = 3
+
+
+def _esc(text: str) -> str:
+    """Экранирует спецсимволы Markdown v1 в пользовательском тексте."""
+    for char in ('_', '*', '`', '['):
+        text = text.replace(char, f'\\{char}')
+    return text
 
 # Тексты кнопок клавиатуры, которые нужно удалять из чата
 _BUTTON_TEXTS = {
@@ -106,13 +113,17 @@ async def cmd_start(message: Message):
         # Задание: вход в бот сегодня
         login_completed = await complete_daily_task(user_id, 'login')
         if login_completed:
-            from data import add_points
             await add_points(user_id, 1)
             await message.answer("✅ Задание выполнено: вход в бот (+1 очко)")
         # Уведомление о входящих лайках
         count = await count_pending_likes(user_id)
         if count > 0:
-            word = 'человек хочет' if count == 1 else 'человек хотят'
+            if count == 1:
+                word = 'человек хочет'
+            elif 2 <= count <= 4:
+                word = 'человека хотят'
+            else:
+                word = 'человек хотят'
             await message.answer(f"👀 {count} {word} с тобой познакомиться!")
 
 # --------------------- СТАТИСТИКА (ТОЛЬКО АДМИН) ---------------------
@@ -174,7 +185,7 @@ async def cmd_stats(message: Message, bot: Bot):
                 await message.answer(part, parse_mode=None)
     else:
         try:
-            await message.answer(text, parse_mode=None)
+            await message.answer(text, parse_mode="Markdown")
         except Exception:
             await message.answer(text, parse_mode=None)
 
@@ -372,7 +383,7 @@ async def show_profile(message: Message, user_id: int, edit_mode: bool = False):
     verified_line = " ✅ Верифицирован" if verified else ""
     streak_line = f"\n🔥 Стрик: {streak} дней" if streak > 0 else ""
 
-    text = f"📝 **Ваша анкета:**{verified_line}\n{name}, {age}{streak_line}\nОписание: {description}"
+    text = f"📝 **Ваша анкета:**{verified_line}\n{_esc(name)}, {age}{streak_line}\nОписание: {_esc(description)}"
     if badge_line:
         text += f"\nБейджи: {badge_line}"
 
@@ -390,10 +401,13 @@ async def show_profile(message: Message, user_id: int, edit_mode: bool = False):
                     media_group.append(InputMediaPhoto(media=file_id))
             await message.answer_media_group(media=media_group)
     except TelegramBadRequest as e:
+        err_str = str(e).lower()
         logging.error(f"Ошибка отправки фото для user {user_id}: {e}")
-        await message.answer(f"{text}\n\n⚠️ Некоторые фото повреждены, обновите их.", parse_mode="Markdown")
-        profile['photos'] = []
-        await save_profile(user_id, name, age, profile['gender'], profile['interests'], profile['institute'], description, [])
+        if "can't parse" in err_str or "parse entities" in err_str:
+            await message.answer("Ошибка при отображении анкеты. Попробуйте снова.")
+        else:
+            await message.answer(f"{text}\n\n⚠️ Некоторые фото повреждены, обновите их.", parse_mode="Markdown")
+            await save_profile(user_id, name, age, profile['gender'], profile['interests'], profile['institute'], description, [])
 
     if not edit_mode:
         is_admin = (user_id in config.ADMIN_IDS)
@@ -432,6 +446,8 @@ async def process_edit_choice(message: Message, state: FSMContext):
         return
 
     if choice == "Пересоздать анкету":
+        user_id = message.from_user.id
+        await delete_profile(user_id)
         await state.clear()
         await cmd_create(message, state)
         return
@@ -786,7 +802,7 @@ async def show_profile_by_id(target_message: Message, profile_id: int, state: FS
     video_file_id = profile.get('video_file_id')
 
     verified_mark = " ✅" if profile.get('verified') else ""
-    text = f"👤 **Анкета:**\n{name}, {age}{verified_mark}\nОписание: {description}"
+    text = f"👤 **Анкета:**\n{_esc(name)}, {age}{verified_mark}\nОписание: {_esc(description)}"
 
     try:
         if not photos:
@@ -867,11 +883,11 @@ async def send_profile_to_user(bot: Bot, to_user_id: int, profile: dict, custom_
     photos = profile.get('photos', [])
 
     if custom_text:
-        header = f"💌 {custom_text}\n\n"
+        header = f"💌 {_esc(custom_text)}\n\n"
     else:
         header = ""
 
-    text = f"{header}👤 **Анкета:**\n{name}, {age}\nОписание: {description}"
+    text = f"{header}👤 **Анкета:**\n{_esc(name)}, {age}\nОписание: {_esc(description)}"
 
     try:
         if not photos:
@@ -924,7 +940,6 @@ async def handle_reaction(callback: CallbackQuery, state: FSMContext, bot: Bot):
         if today_likes >= 3:
             completed = await complete_daily_task(user_id, 'like_3')
             if completed:
-                from data import add_points
                 await add_points(user_id, 2)
                 await callback.message.answer("✅ Задание выполнено: 3 лайка за день (+2 очка)")
 
@@ -948,10 +963,6 @@ async def handle_reaction(callback: CallbackQuery, state: FSMContext, bot: Bot):
 
 
     elif action == "superlike":
-
-        # Убираем клавиатуру у текущего сообщения
-
-        await callback.message.edit_reply_markup(reply_markup=None)
 
         # Сохраняем ID цели для следующего шага
 
@@ -1010,7 +1021,6 @@ async def process_superlike_message(message: Message, state: FSMContext, bot: Bo
     # Задание: отправить суперлайк
     completed = await complete_daily_task(user_id, 'superlike')
     if completed:
-        from data import add_points
         await add_points(user_id, 3)
         await message.answer("✅ Задание выполнено: суперлайк отправлен (+3 очка)")
 
@@ -1032,7 +1042,7 @@ async def send_like_notification(bot: Bot, liker_id: int, target_id: int):
     description = liker_profile['description']
     photos = liker_profile.get('photos', [])
 
-    text = f"💌 Пользователь {name} лайкнул вашу анкету!\n\n👤 **Анкета:**\n{name}, {age}\nОписание: {description}"
+    text = f"💌 Пользователь {_esc(name)} лайкнул вашу анкету!\n\n👤 **Анкета:**\n{_esc(name)}, {age}\nОписание: {_esc(description)}"
 
     try:
         if not photos:
@@ -1081,7 +1091,7 @@ async def send_superlike_notification(bot: Bot, liker_id: int, target_id: int, c
     description = liker_profile['description']
     photos = liker_profile.get('photos', [])
 
-    text = f"💌 Пользователь {name} отправил вам суперлайк!\n\n✉️ Сообщение: {custom_message}\n\n👤 **Анкета:**\n{name}, {age}\nОписание: {description}"
+    text = f"💌 Пользователь {_esc(name)} отправил вам суперлайк!\n\n✉️ Сообщение: {_esc(custom_message)}\n\n👤 **Анкета:**\n{_esc(name)}, {age}\nОписание: {_esc(description)}"
 
     try:
         if not photos:
@@ -1207,6 +1217,7 @@ async def handle_reply_callback(callback: CallbackQuery, bot: Bot):
         if user_profile and liker_profile and is_compatible(liker_profile['gender'], user_profile['interests']):
             liker_ratings = await get_ratings(liker_id)
             if user_id in liker_ratings['liked']:
+                await callback.answer("Взаимная симпатия!")
                 await notify_mutual_like(bot, user_id, liker_id)
             else:
                 await callback.answer("Вы ответили лайком!")

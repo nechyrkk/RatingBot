@@ -24,6 +24,7 @@ def get_admin_keyboard(has_profile: bool = False):
     buttons.append([KeyboardButton(text="Рулетка"), KeyboardButton(text="Мой рейтинг")])
     buttons.append([KeyboardButton(text="Топ встреч"), KeyboardButton(text="Мои задания")])
     buttons.append([KeyboardButton(text="Редактировать анкету"), KeyboardButton(text="⚙️ Ещё...")])
+    buttons.append([KeyboardButton(text="Статистика")])
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
 def get_more_keyboard(verified: bool = False, is_admin: bool = False) -> ReplyKeyboardMarkup:

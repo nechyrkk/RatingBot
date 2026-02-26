@@ -50,8 +50,8 @@ async def get_next_profile(user_id: int, state_data: dict) -> (int, dict):
         'current_pool': 'new' или 'disliked'
     Если списки не определены или пусты, они будут перезаполнены из БД.
     """
-    # Если списки не определены или пусты, загружаем из БД
-    if 'new_pool' not in state_data or not state_data['new_pool']:
+    # Если пулы ещё не инициализированы — загружаем из БД
+    if 'new_pool' not in state_data:
         new_ids, disliked_ids = await get_profile_pools(user_id)
         state_data['new_pool'] = new_ids
         state_data['disliked_pool'] = disliked_ids
