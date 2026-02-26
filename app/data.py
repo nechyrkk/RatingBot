@@ -179,6 +179,29 @@ async def init_db():
             await db.execute("ALTER TABLE likes ADD COLUMN created_at TIMESTAMP")
             print("Добавлена колонка created_at в likes")
 
+        # Таблица запросов на верификацию (для ModeratorBot)
+        await db.execute('''
+            CREATE TABLE IF NOT EXISTS pending_verifications (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                photo_file_id TEXT NOT NULL,
+                status TEXT DEFAULT 'pending',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                admin_notified INTEGER DEFAULT 0
+            )
+        ''')
+
+        # Колонки для ModeratorBot в meet_tasks
+        cursor = await db.execute("PRAGMA table_info(meet_tasks)")
+        columns = await cursor.fetchall()
+        column_names = [col[1] for col in columns]
+        if 'admin_notified' not in column_names:
+            await db.execute("ALTER TABLE meet_tasks ADD COLUMN admin_notified INTEGER DEFAULT 0")
+            print("Добавлена колонка admin_notified в meet_tasks")
+        if 'video_file_id' not in column_names:
+            await db.execute("ALTER TABLE meet_tasks ADD COLUMN video_file_id TEXT")
+            print("Добавлена колонка video_file_id в meet_tasks")
+
         await db.commit()
 
 # ---------- Профили ----------
@@ -612,6 +635,27 @@ async def get_random_profile_other_institute(user_id: int, own_institute: str) -
 async def set_verified(user_id: int, verified: int):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute('UPDATE profiles SET verified = ? WHERE user_id = ?', (verified, user_id))
+        await db.commit()
+
+async def save_verification_request(user_id: int, photo_file_id: str):
+    """Сохраняет запрос на верификацию для обработки ModeratorBot.
+    Обновляет фото если уже есть ожидающий запрос от этого пользователя."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT id FROM pending_verifications WHERE user_id = ? AND status = 'pending'",
+            (user_id,)
+        ) as cursor:
+            existing = await cursor.fetchone()
+        if existing:
+            await db.execute(
+                "UPDATE pending_verifications SET photo_file_id = ?, admin_notified = 0 WHERE id = ?",
+                (photo_file_id, existing[0])
+            )
+        else:
+            await db.execute(
+                'INSERT INTO pending_verifications (user_id, photo_file_id) VALUES (?, ?)',
+                (user_id, photo_file_id)
+            )
         await db.commit()
 
 # ---------- Кто смотрел (фича 12) ----------

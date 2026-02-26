@@ -196,39 +196,15 @@ async def handle_video_message(message: Message, bot: Bot):
     if task['initiator_id'] != user_id:
         return
 
-    # Проверяем наличие администраторов
-    if not config.ADMIN_IDS:
-        await message.answer("Ошибка: не назначен администратор для проверки.")
-        return
+    # Сохраняем video_file_id и переводим в waiting_admin — ModeratorBot заберёт и отправит администраторам
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            'UPDATE meet_tasks SET status = ?, video_file_id = ?, admin_notified = 0 WHERE id = ?',
+            ('waiting_admin', message.video_note.file_id, task['id'])
+        )
+        await db.commit()
 
-    admin_id = config.ADMIN_IDS[0]
-
-    # Отправляем администратору текстовое уведомление
-    await bot.send_message(
-        admin_id,
-        f"📹 Видеоподтверждение от пользователя {user_id} для задания #{task['id']}"
-    )
-
-    # Пересылаем видеокружок (без caption)
-    video_msg = await bot.send_video_note(admin_id, message.video_note.file_id)
-
-    # Сохраняем message_id пересланного видео
-    await update_meet_task_status(task['id'], 'waiting_admin', video_message_id=video_msg.message_id)
-
-    # Отправляем админу инлайн-кнопки для подтверждения
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="✅ Подтвердить", callback_data=f"confirm_meet_{task['id']}"),
-            InlineKeyboardButton(text="❌ Отказать", callback_data=f"decline_meet_{task['id']}")
-        ]
-    ])
-    await bot.send_message(
-        admin_id,
-        f"Подтвердите встречу для задания #{task['id']} (пользователи: {task['user1_id']} и {task['user2_id']})",
-        reply_markup=keyboard
-    )
-
-    await message.answer("Видео отправлено администратору. Ожидайте подтверждения.")
+    await message.answer("Видео отправлено на проверку. Ожидайте подтверждения администратора.")
 
 @router.message(~StateFilter(EditProfile.waiting_for_new_video), F.video_note)
 async def video_note_handler(message: Message, bot: Bot):
