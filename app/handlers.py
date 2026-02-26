@@ -30,7 +30,8 @@ from data import (
     award_badge, get_user_badges,
     get_daily_task_completions, complete_daily_task, count_today_likes,
     can_use_roulette, set_roulette_used, get_random_profile_other_institute,
-    set_verified, record_profile_view, get_recent_viewers, save_profile_video
+    set_verified, record_profile_view, get_recent_viewers, save_profile_video,
+    save_verification_request
 )
 
 router = Router()
@@ -771,7 +772,9 @@ async def cmd_browse(message: Message, state: FSMContext):
     await state.update_data(
         new_pool=[],
         disliked_pool=[],
+        liked_pool=[],
         current_pool='new',
+        pools_loaded=False,
         current_profile_id=None,
         last_message_id=None
     )
@@ -782,7 +785,7 @@ async def cmd_browse(message: Message, state: FSMContext):
     await show_next_profile(message, user_id, state)
 
 
-async def show_profile_by_id(target_message: Message, profile_id: int, state: FSMContext):
+async def show_profile_by_id(target_message: Message, profile_id: int, state: FSMContext, is_revisit: bool = False):
     """Показывает анкету с заданным ID, обновляет состояние."""
     viewer_id = target_message.from_user.id
 
@@ -802,7 +805,8 @@ async def show_profile_by_id(target_message: Message, profile_id: int, state: FS
     video_file_id = profile.get('video_file_id')
 
     verified_mark = " ✅" if profile.get('verified') else ""
-    text = f"👤 **Анкета:**\n{_esc(name)}, {age}{verified_mark}\nОписание: {_esc(description)}"
+    revisit_note = "\n_Вы уже лайкнули эту анкету_\n" if is_revisit else ""
+    text = f"👤 **Анкета:**\n{_esc(name)}, {age}{verified_mark}\n{revisit_note}Описание: {_esc(description)}"
 
     try:
         if not photos:
@@ -865,7 +869,7 @@ async def show_next_profile(target_message: Message, user_id: int, state: FSMCon
         except Exception as e:
             logging.warning(f"Не удалось удалить предыдущее сообщение: {e}")
 
-    next_id, updated_data = await get_next_profile(user_id, data)
+    next_id, updated_data, is_revisit = await get_next_profile(user_id, data)
     if next_id is None:
         await target_message.answer(
             "Больше нет анкет, соответствующих вашим интересам. Попробуйте позже или измените настройки."
@@ -873,7 +877,7 @@ async def show_next_profile(target_message: Message, user_id: int, state: FSMCon
         await state.clear()
         return
     await state.update_data(**updated_data)
-    await show_profile_by_id(target_message, next_id, state)
+    await show_profile_by_id(target_message, next_id, state, is_revisit=is_revisit)
 
 # --------------------- ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ДЛЯ ОТПРАВКИ АНКЕТЫ ---------------------
 async def send_profile_to_user(bot: Bot, to_user_id: int, profile: dict, custom_text: str = None):
@@ -1505,20 +1509,10 @@ async def cmd_verification(message: Message, state: FSMContext):
 @router.message(Verification.waiting_for_card, F.photo)
 async def process_verification_card(message: Message, state: FSMContext, bot: Bot):
     user_id = message.from_user.id
-    if not config.ADMIN_IDS:
-        await state.clear()
-        await message.answer("Ошибка: не назначен администратор.")
-        return
+    photo_file_id = message.photo[-1].file_id
 
-    admin_id = config.ADMIN_IDS[0]
-    # Пересылаем фото администратору
-    await bot.send_message(admin_id, f"🎓 Запрос на верификацию от пользователя {user_id}")
-    await bot.send_photo(
-        admin_id,
-        photo=message.photo[-1].file_id,
-        caption=f"Студенческий билет от {user_id}",
-        reply_markup=get_verification_admin_keyboard(user_id)
-    )
+    # Сохраняем запрос в БД — ModeratorBot заберёт и отправит администраторам
+    await save_verification_request(user_id, photo_file_id)
 
     await state.clear()
     is_admin = (user_id in config.ADMIN_IDS)
