@@ -185,11 +185,19 @@ async def init_db():
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER NOT NULL,
                 photo_file_id TEXT NOT NULL,
+                photo_path TEXT,
                 status TEXT DEFAULT 'pending',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 admin_notified INTEGER DEFAULT 0
             )
         ''')
+
+        # Миграция: добавляем photo_path если её нет
+        cursor = await db.execute("PRAGMA table_info(pending_verifications)")
+        pv_cols = {row[1] for row in await cursor.fetchall()}
+        if 'photo_path' not in pv_cols:
+            await db.execute("ALTER TABLE pending_verifications ADD COLUMN photo_path TEXT")
+            print("Добавлена колонка photo_path в pending_verifications")
 
         # Колонки для ModeratorBot в meet_tasks
         cursor = await db.execute("PRAGMA table_info(meet_tasks)")
@@ -637,7 +645,7 @@ async def set_verified(user_id: int, verified: int):
         await db.execute('UPDATE profiles SET verified = ? WHERE user_id = ?', (verified, user_id))
         await db.commit()
 
-async def save_verification_request(user_id: int, photo_file_id: str):
+async def save_verification_request(user_id: int, photo_file_id: str, photo_path: str = None):
     """Сохраняет запрос на верификацию для обработки ModeratorBot.
     Обновляет фото если уже есть ожидающий запрос от этого пользователя."""
     async with aiosqlite.connect(DB_PATH) as db:
@@ -648,13 +656,13 @@ async def save_verification_request(user_id: int, photo_file_id: str):
             existing = await cursor.fetchone()
         if existing:
             await db.execute(
-                "UPDATE pending_verifications SET photo_file_id = ?, admin_notified = 0 WHERE id = ?",
-                (photo_file_id, existing[0])
+                "UPDATE pending_verifications SET photo_file_id = ?, photo_path = ?, admin_notified = 0 WHERE id = ?",
+                (photo_file_id, photo_path, existing[0])
             )
         else:
             await db.execute(
-                'INSERT INTO pending_verifications (user_id, photo_file_id) VALUES (?, ?)',
-                (user_id, photo_file_id)
+                'INSERT INTO pending_verifications (user_id, photo_file_id, photo_path) VALUES (?, ?, ?)',
+                (user_id, photo_file_id, photo_path)
             )
         await db.commit()
 

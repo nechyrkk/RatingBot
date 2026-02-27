@@ -1,4 +1,5 @@
 import logging
+import os
 import random
 from typing import Callable, Awaitable, Any
 from aiogram import Router, F, Bot, BaseMiddleware
@@ -1511,8 +1512,20 @@ async def process_verification_card(message: Message, state: FSMContext, bot: Bo
     user_id = message.from_user.id
     photo_file_id = message.photo[-1].file_id
 
+    # Скачиваем фото на диск — file_id у каждого бота свой, поэтому
+    # ModeratorBot не может переслать фото по file_id от RatingBot
+    photo_path = None
+    try:
+        verif_dir = os.path.join(os.path.dirname(os.path.abspath(DB_PATH)), 'verif_photos')
+        os.makedirs(verif_dir, exist_ok=True)
+        photo_path = os.path.join(verif_dir, f'{user_id}.jpg')
+        await bot.download(photo_file_id, destination=photo_path)
+    except Exception as e:
+        logging.warning(f"Не удалось скачать фото верификации для {user_id}: {e}")
+        photo_path = None
+
     # Сохраняем запрос в БД — ModeratorBot заберёт и отправит администраторам
-    await save_verification_request(user_id, photo_file_id)
+    await save_verification_request(user_id, photo_file_id, photo_path)
 
     await state.clear()
     is_admin = (user_id in config.ADMIN_IDS)
