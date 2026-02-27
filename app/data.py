@@ -209,6 +209,9 @@ async def init_db():
         if 'video_file_id' not in column_names:
             await db.execute("ALTER TABLE meet_tasks ADD COLUMN video_file_id TEXT")
             print("Добавлена колонка video_file_id в meet_tasks")
+        if 'video_path' not in column_names:
+            await db.execute("ALTER TABLE meet_tasks ADD COLUMN video_path TEXT")
+            print("Добавлена колонка video_path в meet_tasks")
 
         await db.commit()
 

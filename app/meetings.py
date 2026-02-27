@@ -1,3 +1,4 @@
+import os
 import random
 import datetime
 import logging
@@ -196,11 +197,23 @@ async def handle_video_message(message: Message, bot: Bot):
     if task['initiator_id'] != user_id:
         return
 
-    # Сохраняем video_file_id и переводим в waiting_admin — ModeratorBot заберёт и отправит администраторам
+    # Скачиваем видео на диск — video_file_id привязан к боту, ModeratorBot не сможет его переслать
+    video_file_id = message.video_note.file_id
+    video_path = None
+    try:
+        video_dir = os.path.join(os.path.dirname(os.path.abspath(DB_PATH)), 'meet_videos')
+        os.makedirs(video_dir, exist_ok=True)
+        video_path = os.path.join(video_dir, f'{task["id"]}.mp4')
+        await bot.download(video_file_id, destination=video_path)
+    except Exception as e:
+        logging.warning(f"Не удалось скачать видео встречи {task['id']}: {e}")
+        video_path = None
+
+    # Сохраняем video_file_id и video_path, переводим в waiting_admin
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
-            'UPDATE meet_tasks SET status = ?, video_file_id = ?, admin_notified = 0 WHERE id = ?',
-            ('waiting_admin', message.video_note.file_id, task['id'])
+            'UPDATE meet_tasks SET status = ?, video_file_id = ?, video_path = ?, admin_notified = 0 WHERE id = ?',
+            ('waiting_admin', video_file_id, video_path, task['id'])
         )
         await db.commit()
 
