@@ -32,7 +32,7 @@ from data import (
     get_daily_task_completions, complete_daily_task, count_today_likes,
     can_use_roulette, set_roulette_used, get_random_profile_other_institute,
     set_verified, record_profile_view, get_recent_viewers, save_profile_video,
-    save_verification_request
+    save_verification_request, check_like_exists
 )
 
 router = Router()
@@ -264,6 +264,9 @@ async def process_name(message: Message, state: FSMContext):
     if not name:
         await message.answer("Имя не может быть пустым. Попробуйте снова.")
         return
+    if len(name) > 50:
+        await message.answer("Имя слишком длинное (максимум 50 символов). Попробуйте снова.")
+        return
     await state.update_data(name=name)
     await state.set_state(CreateProfile.waiting_for_age)
     await message.answer("Сколько вам лет?")
@@ -311,6 +314,9 @@ async def process_description(message: Message, state: FSMContext):
     description = message.text.strip()
     if not description:
         await message.answer("Описание не может быть пустым.")
+        return
+    if len(description) > 500:
+        await message.answer("Описание слишком длинное (максимум 500 символов). Попробуйте снова.")
         return
     await state.update_data(description=description, photos=[])
     await state.set_state(CreateProfile.waiting_for_photos)
@@ -923,8 +929,16 @@ async def handle_reaction(callback: CallbackQuery, state: FSMContext, bot: Bot):
         await callback.answer()
         return
     action, target_id_str = parts
-    target_id = int(target_id_str)
+    try:
+        target_id = int(target_id_str)
+    except ValueError:
+        await callback.answer()
+        return
     user_id = callback.from_user.id
+
+    if target_id == user_id:
+        await callback.answer()
+        return
 
     await callback.message.edit_reply_markup(reply_markup=None)
 
@@ -1004,6 +1018,9 @@ async def process_superlike_message(message: Message, state: FSMContext, bot: Bo
     super_text = message.text.strip()
     if not super_text:
         await message.answer("Сообщение не может быть пустым. Отправьте текст или отмените командой /cancel")
+        return
+    if len(super_text) > 300:
+        await message.answer("Сообщение слишком длинное (максимум 300 символов). Попробуйте снова.")
         return
 
     # Сохраняем лайк
@@ -1188,8 +1205,15 @@ async def process_rating(callback: CallbackQuery):
     if len(data_parts) < 3:
         await callback.answer()
         return
-    value = int(data_parts[1])
-    target_id = int(data_parts[2])
+    try:
+        value = int(data_parts[1])
+        target_id = int(data_parts[2])
+    except (ValueError, IndexError):
+        await callback.answer()
+        return
+    if not (1 <= value <= 5):
+        await callback.answer()
+        return
     voter_id = callback.from_user.id
 
     if voter_id == target_id:
@@ -1210,12 +1234,20 @@ async def handle_reply_callback(callback: CallbackQuery, bot: Bot):
         await callback.answer()
         return
     action = parts[1]
-    liker_id = int(parts[2])
+    try:
+        liker_id = int(parts[2])
+    except (ValueError, IndexError):
+        await callback.answer()
+        return
     user_id = callback.from_user.id
 
     await callback.message.edit_reply_markup(reply_markup=None)
 
     if action == "like":
+        # Проверяем, что лайк от liker_id к нам действительно существует
+        if not await check_like_exists(liker_id, user_id):
+            await callback.answer("Лайк не найден.")
+            return
         await add_like(user_id, liker_id)
         user_profile = await get_profile(user_id)
         liker_profile = await get_profile(liker_id)
@@ -1345,9 +1377,9 @@ async def cmd_hot_today(message: Message):
         profile = await get_profile(uid)
         if not profile:
             continue
-        name = profile['name']
+        name = _esc(profile['name'])
         age = profile['age']
-        description = profile['description']
+        description = _esc(profile['description'])
         photos = profile.get('photos', [])
         verified_mark = " ✅" if profile.get('verified') else ""
         text = f"👤 {name}, {age}{verified_mark}\n{description}"
@@ -1402,6 +1434,9 @@ async def cmd_roulette(message: Message, state: FSMContext):
         await message.answer("Не удалось загрузить анкету. Попробуй позже.")
         return
 
+    # Помечаем рулетку использованной сразу — до показа
+    await set_roulette_used(user_id)
+
     name = roulette_profile['name']
     age = roulette_profile['age']
     description = roulette_profile['description']
@@ -1438,7 +1473,6 @@ async def handle_roulette_like(callback: CallbackQuery, state: FSMContext, bot: 
     user_id = callback.from_user.id
 
     await add_like(user_id, target_id)
-    await set_roulette_used(user_id)
 
     target_profile = await get_profile(target_id)
     user_profile = await get_profile(user_id)
@@ -1455,7 +1489,6 @@ async def handle_roulette_like(callback: CallbackQuery, state: FSMContext, bot: 
 
 @router.callback_query(RouletteState.viewing, F.data.startswith("roulette_pass_"))
 async def handle_roulette_pass(callback: CallbackQuery, state: FSMContext):
-    await set_roulette_used(callback.from_user.id)
     await callback.message.edit_reply_markup(reply_markup=None)
     await callback.answer("Пропущено.")
     await state.clear()

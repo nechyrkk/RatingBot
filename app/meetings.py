@@ -82,7 +82,11 @@ async def create_meet_after_like(bot: Bot, user1_id: int, user2_id: int, initiat
 
 @router.callback_query(F.data.startswith("meet_agree_"))
 async def meet_agree_callback(callback: CallbackQuery, bot: Bot):
-    task_id = int(callback.data.split("_")[2])
+    try:
+        task_id = int(callback.data.split("_")[2])
+    except (ValueError, IndexError):
+        await callback.answer("Некорректные данные.", show_alert=True)
+        return
     user_id = callback.from_user.id
 
     result = await update_meet_agreement(task_id, user_id, agreed=True)
@@ -138,7 +142,11 @@ async def meet_agree_callback(callback: CallbackQuery, bot: Bot):
 
 @router.callback_query(F.data.startswith("meet_decline_"))
 async def meet_decline_callback(callback: CallbackQuery, bot: Bot):
-    task_id = int(callback.data.split("_")[2])
+    try:
+        task_id = int(callback.data.split("_")[2])
+    except (ValueError, IndexError):
+        await callback.answer("Некорректные данные.", show_alert=True)
+        return
     user_id = callback.from_user.id
 
     result = await update_meet_agreement(task_id, user_id, agreed=False)
@@ -226,7 +234,14 @@ async def video_note_handler(message: Message, bot: Bot):
 @router.callback_query(F.data.startswith("confirm_meet_"))
 async def admin_confirm_meet(callback: CallbackQuery, bot: Bot):
     """Подтверждение встречи администратором"""
-    task_id = int(callback.data.split("_")[2])
+    if callback.from_user.id not in config.ADMIN_IDS:
+        await callback.answer("Нет прав.", show_alert=True)
+        return
+    try:
+        task_id = int(callback.data.split("_")[2])
+    except (ValueError, IndexError):
+        await callback.answer("Некорректные данные.", show_alert=True)
+        return
     task = await get_meet_task_by_id(task_id)
     if not task or task['status'] != 'waiting_admin':
         await callback.answer("Задание не найдено или уже обработано.", show_alert=True)
@@ -264,7 +279,14 @@ async def admin_confirm_meet(callback: CallbackQuery, bot: Bot):
 @router.callback_query(F.data.startswith("decline_meet_"))
 async def admin_decline_meet(callback: CallbackQuery, bot: Bot):
     """Отказ администратора"""
-    task_id = int(callback.data.split("_")[2])
+    if callback.from_user.id not in config.ADMIN_IDS:
+        await callback.answer("Нет прав.", show_alert=True)
+        return
+    try:
+        task_id = int(callback.data.split("_")[2])
+    except (ValueError, IndexError):
+        await callback.answer("Некорректные данные.", show_alert=True)
+        return
     task = await get_meet_task_by_id(task_id)
     if not task or task['status'] != 'waiting_admin':
         await callback.answer("Задание не найдено или уже обработано.", show_alert=True)

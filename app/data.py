@@ -290,6 +290,14 @@ async def add_like(user_id: int, target_id: int):
         await db.execute('INSERT OR IGNORE INTO likes (user_id, liked_user_id) VALUES (?, ?)', (user_id, target_id))
         await db.commit()
 
+async def check_like_exists(liker_id: int, target_id: int) -> bool:
+    """Проверяет, поставил ли liker_id лайк target_id."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            'SELECT 1 FROM likes WHERE user_id = ? AND liked_user_id = ?', (liker_id, target_id)
+        ) as cursor:
+            return await cursor.fetchone() is not None
+
 async def add_dislike(user_id: int, target_id: int):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute('INSERT OR IGNORE INTO dislikes (user_id, disliked_user_id) VALUES (?, ?)', (user_id, target_id))
@@ -391,43 +399,48 @@ async def update_meet_agreement(task_id: int, user_id: int, agreed: bool):
          - None, если задание не найдено или уже не в статусе pending
     """
     async with aiosqlite.connect(DB_PATH) as db:
-        # Получаем задание
-        async with db.execute('SELECT user1_id, user2_id, status FROM meet_tasks WHERE id = ?', (task_id,)) as cursor:
-            row = await cursor.fetchone()
-            if not row:
-                return None
-            user1, user2, status = row
-
-        if status != 'pending':
-            return None  # уже обработано
-
-        if user_id == user1:
-            column = 'user1_confirmed'
-            other_id = user2
-        elif user_id == user2:
-            column = 'user2_confirmed'
-            other_id = user1
-        else:
-            return None
-
-        if agreed:
-            # Отмечаем согласие
-            await db.execute(f'UPDATE meet_tasks SET {column} = 1 WHERE id = ?', (task_id,))
-            # Проверяем, оба ли согласны
-            async with db.execute('SELECT user1_confirmed, user2_confirmed FROM meet_tasks WHERE id = ?', (task_id,)) as cursor:
+        # BEGIN IMMEDIATE: исключает гонку при одновременном нажатии обоими
+        await db.execute('BEGIN IMMEDIATE')
+        try:
+            async with db.execute('SELECT user1_id, user2_id, status FROM meet_tasks WHERE id = ?', (task_id,)) as cursor:
                 row = await cursor.fetchone()
-                if row and row[0] == 1 and row[1] == 1:
-                    # Оба согласны -> переводим в waiting_video
-                    await db.execute('UPDATE meet_tasks SET status = ? WHERE id = ?', ('waiting_video', task_id))
-                    await db.commit()
-                    return 'both_agreed'
-            await db.commit()
-            return 'agreed'
-        else:
-            # Отказ -> меняем статус на declined
-            await db.execute('UPDATE meet_tasks SET status = ? WHERE id = ?', ('declined', task_id))
-            await db.commit()
-            return 'declined'
+                if not row:
+                    await db.execute('ROLLBACK')
+                    return None
+                user1, user2, status = row
+
+            if status != 'pending':
+                await db.execute('ROLLBACK')
+                return None  # уже обработано
+
+            if user_id == user1:
+                column = 'user1_confirmed'
+            elif user_id == user2:
+                column = 'user2_confirmed'
+            else:
+                await db.execute('ROLLBACK')
+                return None
+
+            # Allowlist: column должен быть одним из двух допустимых значений
+            assert column in {'user1_confirmed', 'user2_confirmed'}
+
+            if agreed:
+                await db.execute(f'UPDATE meet_tasks SET {column} = 1 WHERE id = ?', (task_id,))
+                async with db.execute('SELECT user1_confirmed, user2_confirmed FROM meet_tasks WHERE id = ?', (task_id,)) as cursor:
+                    row = await cursor.fetchone()
+                    if row and row[0] == 1 and row[1] == 1:
+                        await db.execute('UPDATE meet_tasks SET status = ? WHERE id = ?', ('waiting_video', task_id))
+                        await db.execute('COMMIT')
+                        return 'both_agreed'
+                await db.execute('COMMIT')
+                return 'agreed'
+            else:
+                await db.execute('UPDATE meet_tasks SET status = ? WHERE id = ?', ('declined', task_id))
+                await db.execute('COMMIT')
+                return 'declined'
+        except Exception:
+            await db.execute('ROLLBACK')
+            raise
 
 # ---------- Очки ----------
 async def add_points(user_id: int, points: int):
